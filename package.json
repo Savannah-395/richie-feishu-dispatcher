@@ -1,0 +1,21 @@
+{
+  "name": "richie-feishu-dispatcher",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Richie Feishu long-connection bot with Codex CLI delegation and Git-synced local skills.",
+  "scripts": {
+    "start": "node src/index.js",
+    "check": "node --check src/index.js && node --check src/codex-runner.js && node --check src/skill-sync.js && node --check src/sync-once.js",
+    "sync:once": "node src/sync-once.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "latest",
+    "@openai/codex": "^0.132.0",
+    "dotenv": "latest",
+    "openai": "latest"
+  }
+}
