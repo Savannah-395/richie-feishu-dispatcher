@@ -36,14 +36,14 @@ scripts/
 
 `BOT_DISPLAY_NAME` 默认是 `richie`。如果飞书后台显示名大小写不同，也建议这里保持同名。
 
-回复策略默认是每条消息都必须 @ richie：
+回复策略默认是话题第一条消息必须 @ richie，后续同一话题内继续交互不用重复 @：
 
 ```env
 BOT_REQUIRE_MENTION_TO_START=true
-BOT_REQUIRE_MENTION_TO_REPLY=true
+BOT_REQUIRE_MENTION_TO_REPLY=false
 ```
 
-`BOT_REQUIRE_MENTION_TO_REPLY=true` 时，即使一个话题之前已经和 richie 互动过，后续没有 @ 的消息也会被忽略。
+`BOT_REQUIRE_MENTION_TO_START=true` 表示一个新话题必须先 @ richie 才会被激活。`BOT_REQUIRE_MENTION_TO_REPLY=false` 表示话题激活后，后续同一话题里的消息可以继续触发 richie 回复。
 
 GitHub 同步相关默认值：
 
