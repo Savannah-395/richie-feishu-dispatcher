@@ -28,7 +28,7 @@ const channel = createLarkChannel({
   appSecret: config.feishu.appSecret,
   loggerLevel: LoggerLevel.info,
   policy: {
-    requireMention: false,
+    requireMention: config.feishu.requireMentionToReply,
     dmMode: "ignore",
   },
   includeRawInMessage: false,
@@ -231,10 +231,15 @@ async function handleMessage(message) {
 
   const topicId = getTopicId(message);
   const topicActive = store.isActive(topicId);
-  const shouldStartTopic = !config.feishu.requireMentionToStart || message.mentionedBot;
+  const shouldReply = config.feishu.requireMentionToReply
+    ? message.mentionedBot
+    : topicActive || !config.feishu.requireMentionToStart || message.mentionedBot;
 
-  if (!topicActive && !shouldStartTopic) {
-    console.log(`Ignored message ${message.messageId}: topic ${topicId} is inactive and bot was not mentioned`);
+  if (!shouldReply) {
+    const reason = config.feishu.requireMentionToReply
+      ? "bot was not mentioned"
+      : `topic ${topicId} is inactive and bot was not mentioned`;
+    console.log(`Ignored message ${message.messageId}: ${reason}`);
     return;
   }
 

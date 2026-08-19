@@ -5,6 +5,7 @@ dotenv.config();
 
 const richieSkillsDir = (process.env.RICHIE_SKILLS_DIR || "skills").trim();
 const defaultCodexSkillsDir = path.join(process.env.USERPROFILE || process.cwd(), ".codex", "skills");
+const requireMentionToStart = readBoolean("BOT_REQUIRE_MENTION_TO_START", true);
 
 function requireEnv(name) {
   const value = process.env[name]?.trim();
@@ -51,7 +52,8 @@ export const config = {
     appSecret: requireEnv("FEISHU_APP_SECRET"),
     encryptKey: process.env.FEISHU_ENCRYPT_KEY?.trim() || undefined,
     displayName: process.env.BOT_DISPLAY_NAME?.trim() || "richie",
-    requireMentionToStart: readBoolean("BOT_REQUIRE_MENTION_TO_START", true),
+    requireMentionToStart,
+    requireMentionToReply: readBoolean("BOT_REQUIRE_MENTION_TO_REPLY", requireMentionToStart),
   },
   openai: {
     apiKey: requireEnv("OPENAI_API_KEY"),
