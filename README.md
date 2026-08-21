@@ -60,6 +60,22 @@ skills/
     SKILL.md
 ```
 
+如果某个飞书群固定属于一个项目 skill，在项目 repo 里放：
+
+```text
+deploy/richie/allowed-chats.json
+```
+
+最简单格式：
+
+```json
+{
+  "allowed_chat_ids": ["oc_xxxxxxxxxxxxxxxxxxxx"]
+}
+```
+
+当项目只有一个 skill 时，dispatcher 会把这些群里的消息直接路由到这个 skill；没有命中群聊或显式 skill 的消息，才回到普通回复兜底。
+
 可以从本仓库的模板复制：
 
 ```text

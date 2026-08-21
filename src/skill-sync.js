@@ -161,6 +161,76 @@ async function scanSkillDirectory({ skillsRoot, projectName, projectPath, projec
   return skills;
 }
 
+function normalizeStringArray(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => `${item}`.trim()).filter(Boolean);
+  }
+  if (typeof value === "string") {
+    return value.split(",").map((item) => item.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+function getRouteEntries(routeConfig) {
+  const entries = [];
+  for (const key of ["routes", "skill_routes", "skillRoutes"]) {
+    if (Array.isArray(routeConfig?.[key])) {
+      entries.push(...routeConfig[key]);
+    }
+  }
+
+  if (Array.isArray(routeConfig?.skills)) {
+    entries.push(...routeConfig.skills);
+  } else if (routeConfig?.skills && typeof routeConfig.skills === "object") {
+    for (const [skillName, value] of Object.entries(routeConfig.skills)) {
+      entries.push({ skill: skillName, ...value });
+    }
+  }
+
+  return entries.filter((entry) => entry && typeof entry === "object");
+}
+
+function findConfiguredSkill(projectSkills, routeConfig) {
+  const configuredSkillName = routeConfig?.skill
+    || routeConfig?.skill_name
+    || routeConfig?.skillName
+    || routeConfig?.default_skill
+    || routeConfig?.defaultSkill
+    || routeConfig?.default_skill_name
+    || routeConfig?.defaultSkillName;
+
+  if (configuredSkillName) {
+    const normalized = `${configuredSkillName}`.trim().toLowerCase();
+    const match = projectSkills.find((skill) => (
+      skill.name.toLowerCase() === normalized
+      || skill.key.toLowerCase() === normalized
+      || `${skill.projectName}--${skill.name}`.toLowerCase() === normalized
+    ));
+    if (match) {
+      return match;
+    }
+  }
+
+  return projectSkills.length === 1 ? projectSkills[0] : undefined;
+}
+
+function buildSkillRoute({ project, skill, chatIds, configPath, source }) {
+  return {
+    source,
+    chatIds,
+    projectName: project.name,
+    projectTitle: project.title,
+    projectPath: project.path,
+    skillName: skill?.name || "",
+    skillKey: skill?.key || "",
+    skillTitle: skill?.title || "",
+    skillDescription: skill?.description || "",
+    skillPath: skill?.path || "",
+    skillMdPath: skill?.skillMdPath || "",
+    configPath,
+  };
+}
+
 function getProjectRoots(syncConfig) {
   const configured = Array.isArray(syncConfig.projectRoots) && syncConfig.projectRoots.length > 0
     ? syncConfig.projectRoots
@@ -512,6 +582,68 @@ export async function listRepositorySkills(syncConfig) {
   }
 
   return { projectRoots, projects, skills };
+}
+
+export async function listRepositorySkillRoutes(syncConfig) {
+  const { projectRoots, projects, skills } = await listRepositorySkills(syncConfig);
+  const skillsByProject = new Map();
+  const routes = [];
+
+  for (const skill of skills) {
+    const projectSkills = skillsByProject.get(skill.projectName) || [];
+    projectSkills.push(skill);
+    skillsByProject.set(skill.projectName, projectSkills);
+  }
+
+  for (const project of projects) {
+    const configPath = path.join(project.path, "deploy", "richie", "allowed-chats.json");
+    const routeConfig = await readJson(configPath, undefined);
+    if (!routeConfig) {
+      continue;
+    }
+
+    const projectSkills = skillsByProject.get(project.name) || [];
+    const defaultChatIds = normalizeStringArray(
+      routeConfig.allowed_chat_ids
+      || routeConfig.allowedChatIds
+      || routeConfig.chat_ids
+      || routeConfig.chatIds,
+    );
+    const defaultSkill = findConfiguredSkill(projectSkills, routeConfig);
+
+    if (defaultChatIds.length > 0 && defaultSkill) {
+      routes.push(buildSkillRoute({
+        project,
+        skill: defaultSkill,
+        chatIds: defaultChatIds,
+        configPath,
+        source: "project-allowed-chats",
+      }));
+    }
+
+    for (const entry of getRouteEntries(routeConfig)) {
+      const chatIds = normalizeStringArray(
+        entry.allowed_chat_ids
+        || entry.allowedChatIds
+        || entry.chat_ids
+        || entry.chatIds,
+      );
+      const skill = findConfiguredSkill(projectSkills, entry);
+      if (chatIds.length === 0 || !skill) {
+        continue;
+      }
+
+      routes.push(buildSkillRoute({
+        project,
+        skill,
+        chatIds,
+        configPath,
+        source: "skill-route",
+      }));
+    }
+  }
+
+  return { projectRoots, projects, skills, routes };
 }
 
 async function pullLatest(syncConfig) {

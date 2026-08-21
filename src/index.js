@@ -5,7 +5,7 @@ import { config } from "./config.js";
 import { downloadMessageAttachments, formatAttachmentSummary, shouldUseAttachmentContext } from "./attachment-manager.js";
 import { extractCodexPrompt, isCodexCommand, runCodexTask } from "./codex-runner.js";
 import { createOpenAIClient, generateThreadReply } from "./openai-client.js";
-import { listRepositorySkills, startGitSync } from "./skill-sync.js";
+import { listRepositorySkillRoutes, listRepositorySkills, startGitSync } from "./skill-sync.js";
 import { ThreadQueue } from "./thread-queue.js";
 import { ThreadStore } from "./thread-store.js";
 
@@ -89,9 +89,116 @@ function hasSupportedResourceType(message) {
   return ["image", "file"].includes(message.rawContentType) || (Array.isArray(message.resources) && message.resources.length > 0);
 }
 
-function buildCodexPrompt({ latestMessage, threadTranscript }) {
+function normalizeForRouteMatch(value) {
+  return (value || "").trim().toLowerCase();
+}
+
+function contentMentionsSkill(content, skill) {
+  const normalized = normalizeForRouteMatch(content);
+  if (!normalized) {
+    return false;
+  }
+
+  const candidates = [
+    skill.key,
+    skill.name,
+    skill.projectName,
+    `${skill.projectName}--${skill.name}`,
+    skill.title,
+  ]
+    .map(normalizeForRouteMatch)
+    .filter((item) => item.length >= 3);
+
+  return candidates.some((candidate) => normalized.includes(candidate));
+}
+
+async function resolveRepositorySkillRoute(message, content) {
+  const { skills, routes } = await listRepositorySkillRoutes(config.sync);
+  const chatRoutes = routes.filter((route) => route.chatIds.includes(message.chatId));
+
+  if (chatRoutes.length === 1) {
+    return { ...chatRoutes[0], reason: `chat ${message.chatId} is mapped to this project skill` };
+  }
+
+  if (chatRoutes.length > 1) {
+    const mentionedRoute = chatRoutes.find((route) => contentMentionsSkill(content, {
+      key: route.skillKey,
+      name: route.skillName,
+      projectName: route.projectName,
+      title: route.skillTitle,
+    }));
+    if (mentionedRoute) {
+      return { ...mentionedRoute, reason: `chat ${message.chatId} and message text matched this skill` };
+    }
+
+    return {
+      ...chatRoutes[0],
+      reason: `chat ${message.chatId} has ${chatRoutes.length} skill routes; routing to the first configured route`,
+      ambiguousRoutes: chatRoutes.map((route) => route.skillKey || route.projectName),
+    };
+  }
+
+  const mentionedSkill = skills.find((skill) => contentMentionsSkill(content, skill));
+  if (mentionedSkill) {
+    return {
+      source: "message-skill-mention",
+      chatIds: [],
+      projectName: mentionedSkill.projectName,
+      projectTitle: mentionedSkill.projectTitle,
+      projectPath: mentionedSkill.projectPath,
+      skillName: mentionedSkill.name,
+      skillKey: mentionedSkill.key,
+      skillTitle: mentionedSkill.title,
+      skillDescription: mentionedSkill.description,
+      skillPath: mentionedSkill.path,
+      skillMdPath: mentionedSkill.skillMdPath,
+      reason: "message text explicitly matched a synced project skill",
+    };
+  }
+
+  return undefined;
+}
+
+function formatSkillRoutePrompt(skillRoute) {
+  if (!skillRoute) {
+    return [];
+  }
+
+  const lines = [
+    "",
+    "Resolved richie project skill route:",
+    `- Reason: ${skillRoute.reason}`,
+    `- Project: ${skillRoute.projectName}${skillRoute.projectTitle ? ` (${skillRoute.projectTitle})` : ""}`,
+  ];
+
+  if (skillRoute.skillKey) {
+    lines.push(`- Skill: ${skillRoute.skillKey}${skillRoute.skillTitle ? ` (${skillRoute.skillTitle})` : ""}`);
+  }
+  if (skillRoute.projectPath) {
+    lines.push(`- Project path: ${skillRoute.projectPath}`);
+  }
+  if (skillRoute.skillPath) {
+    lines.push(`- Skill path: ${skillRoute.skillPath}`);
+  }
+  if (skillRoute.skillMdPath) {
+    lines.push(`- Read this SKILL.md completely before acting: ${skillRoute.skillMdPath}`);
+  }
+  if (skillRoute.ambiguousRoutes?.length > 0) {
+    lines.push(`- Other routes configured for this chat: ${skillRoute.ambiguousRoutes.join(", ")}`);
+  }
+
+  lines.push(
+    "- Treat this route as authoritative for the current Feishu chat unless the user explicitly asks for another project/skill.",
+    "- If the user request is incomplete, ask a project-specific clarification instead of falling back to ordinary chat.",
+  );
+
+  return lines;
+}
+
+function buildCodexPrompt({ latestMessage, threadTranscript, skillRoute }) {
   return [
     "Only use the current Feishu topic context below. Read any local file paths listed in the context when they are relevant.",
+    ...formatSkillRoutePrompt(skillRoute),
     "",
     "Current Feishu topic context:",
     threadTranscript || "(no prior context)",
@@ -280,9 +387,13 @@ async function handleMessage(message) {
         ? getMatchedPrefix(messageContent, config.codex.fullAccessPrefixes)
         : "";
       const forcedCodex = config.codex.enabled && isCodexCommand(messageContent, config.codex.prefix);
+      const skillRoute = config.codex.enabled
+        ? await resolveRepositorySkillRoute(message, messageContent)
+        : undefined;
       const routedCodex = config.codex.enabled && (
         fullAccessPrefix ||
         forcedCodex ||
+        skillRoute ||
         shouldUseCodex(messageContent) ||
         hasCurrentAttachments ||
         (hasTopicAttachments && shouldUseAttachmentContext(messageContent))
@@ -341,11 +452,12 @@ async function handleMessage(message) {
               attachments: attachmentResult.attachments,
             };
         console.log(
-          `Running ${fullAccessPrefix ? "full-access" : forcedCodex ? "forced" : "auto-routed"} Codex task for message ${message.messageId} in topic ${topicId}`,
+          `Running ${skillRoute ? `skill-routed ${skillRoute.skillKey || skillRoute.projectName}` : fullAccessPrefix ? "full-access" : forcedCodex ? "forced" : "auto-routed"} Codex task for message ${message.messageId} in topic ${topicId}`,
         );
         const result = await runCodexTask(config.codex, buildCodexPrompt({
           latestMessage: codexPrompt || userEntry.content,
           threadTranscript,
+          skillRoute,
         }), codexOptions);
         await sendCodexResult(message, result);
         console.log(`Sent Codex task ${result.taskId} result for message ${message.messageId}`);
