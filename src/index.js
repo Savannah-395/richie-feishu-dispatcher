@@ -59,6 +59,8 @@ function shouldUseCodex(content) {
     /保存到本地|这台电脑|本机|本地电脑|电脑上|本地文件|文件夹|目录|工作区|workspace|repo|项目目录/i,
     /(运行|执行).*(命令|脚本|测试|构建|npm|node|python|powershell|cmd|git)/i,
     /(修改|编辑|修复|实现|检查).*(代码|项目|仓库|repo|bug|脚本|文件)/i,
+    /(调研|研究|选品|竞品|市场|热销|爆款|排名|榜单|销量|价格|bsr|asin|keepa|amazon|top\s*\d*)/i,
+    /(墙板|格栅墙板|吸音板|平面墙板|弯曲墙板|柔性墙板|墙裙|收边条|spc|wall\s*panel|slat\s*wall|acoustic\s*panel|wainscot|trim\s*strip)/i,
     /(^|\s)\/skills?\b/i,
     /(使用|调用|运行|加载).{0,20}(skill|技能)/i,
     /(skill|技能).{0,20}(执行|调用|运行|帮我|处理)/i,
