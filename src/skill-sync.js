@@ -171,6 +171,11 @@ function normalizeStringArray(value) {
   return [];
 }
 
+function extractChatIds(value) {
+  const matches = `${value || ""}`.match(/\boc_[A-Za-z0-9_-]+\b/g) || [];
+  return [...new Set(matches)];
+}
+
 function getRouteEntries(routeConfig) {
   const entries = [];
   for (const key of ["routes", "skill_routes", "skillRoutes"]) {
@@ -587,12 +592,57 @@ export async function listRepositorySkills(syncConfig) {
 export async function listRepositorySkillRoutes(syncConfig) {
   const { projectRoots, projects, skills } = await listRepositorySkills(syncConfig);
   const skillsByProject = new Map();
+  const projectsByName = new Map(projects.map((project) => [project.name, project]));
   const routes = [];
+  const upsertRoute = (route) => {
+    const chatIds = [...new Set(normalizeStringArray(route.chatIds))];
+    if (chatIds.length === 0) {
+      return;
+    }
+
+    const routeKey = `${route.projectName}/${route.skillName || route.skillKey || ""}`;
+    const existing = routes.find((item) => `${item.projectName}/${item.skillName || item.skillKey || ""}` === routeKey);
+    if (existing) {
+      existing.chatIds = [...new Set([...existing.chatIds, ...chatIds])];
+      existing.source = [...new Set([...existing.source.split(","), route.source].map((item) => item.trim()).filter(Boolean))].join(",");
+      if (!existing.configPath && route.configPath) {
+        existing.configPath = route.configPath;
+      }
+      return;
+    }
+
+    routes.push({ ...route, chatIds });
+  };
 
   for (const skill of skills) {
     const projectSkills = skillsByProject.get(skill.projectName) || [];
     projectSkills.push(skill);
     skillsByProject.set(skill.projectName, projectSkills);
+  }
+
+  for (const skill of skills) {
+    const project = projectsByName.get(skill.projectName);
+    if (!project) {
+      continue;
+    }
+
+    const chatIds = extractChatIds([
+      skill.key,
+      skill.title,
+      skill.description,
+    ].filter(Boolean).join("\n"));
+
+    if (chatIds.length === 0) {
+      continue;
+    }
+
+    upsertRoute(buildSkillRoute({
+      project,
+      skill,
+      chatIds,
+      configPath: skill.skillMdPath,
+      source: "skill-description-chat-id",
+    }));
   }
 
   for (const project of projects) {
@@ -612,7 +662,7 @@ export async function listRepositorySkillRoutes(syncConfig) {
     const defaultSkill = findConfiguredSkill(projectSkills, routeConfig);
 
     if (defaultChatIds.length > 0 && defaultSkill) {
-      routes.push(buildSkillRoute({
+      upsertRoute(buildSkillRoute({
         project,
         skill: defaultSkill,
         chatIds: defaultChatIds,
@@ -633,7 +683,7 @@ export async function listRepositorySkillRoutes(syncConfig) {
         continue;
       }
 
-      routes.push(buildSkillRoute({
+      upsertRoute(buildSkillRoute({
         project,
         skill,
         chatIds,

@@ -197,6 +197,23 @@ export async function runCodexTask(config, userPrompt, options = {}) {
 
   args.push(prompt);
 
+  if (typeof options.onStart === "function") {
+    try {
+      await options.onStart({
+        taskId,
+        runDir,
+        artifactsDir,
+        finalMessagePath,
+        workingRoot,
+        sandbox,
+        fullAccess,
+        attachments,
+      });
+    } catch (error) {
+      console.warn(`Codex task ${taskId} onStart callback failed`, error);
+    }
+  }
+
   let result;
   try {
     const child = spawn(process.execPath, [codexScript, ...args], {

@@ -164,3 +164,32 @@ npm run sync:once
 - 把机器人 `richie` 拉进目标群
 
 如果只希望在特定群里工作，设置 `BOT_ALLOWED_CHAT_IDS`。
+
+## Dispatcher routing and audit
+
+Group messages are handled by the dispatcher first. If a project skill is mapped to the Feishu group `chat_id`, Richie runs that project skill. If no project skill matches, Richie falls back to the ordinary topic reply.
+
+Preferred project-side mapping:
+
+```markdown
+# wall-panel-market-research
+description: Used for Feishu group oc_xxxxxxxxxxxxxxxxxxxx to run wall panel market research.
+```
+
+The dispatcher also supports explicit project config:
+
+```json
+{
+  "allowed_chat_ids": ["oc_xxxxxxxxxxxxxxxxxxxx"]
+}
+```
+
+Audit group configuration is local-only:
+
+```env
+RICHIE_AUDIT_ENABLED=true
+RICHIE_AUDIT_CHAT_ID=oc_xxxxxxxxxxxxxxxxxxxx
+RICHIE_AUDIT_MAX_MESSAGE_CHARS=2000
+```
+
+When audit is enabled, Richie sends a start message with the user request, selected skill, route source, plan, run directory, and queue snapshot. When the task finishes, Richie replies under that audit message with the final response preview, artifacts, status, and updated queue snapshot. The audit group is output-only, so messages inside it do not trigger work.

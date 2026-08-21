@@ -71,6 +71,11 @@ export const config = {
     maxThreadMessages: readNumber("BOT_MAX_THREAD_MESSAGES", 20),
     maxInputChars: readNumber("BOT_MAX_INPUT_CHARS", 12000),
   },
+  audit: {
+    enabled: readBoolean("RICHIE_AUDIT_ENABLED", Boolean(process.env.RICHIE_AUDIT_CHAT_ID?.trim())),
+    chatId: process.env.RICHIE_AUDIT_CHAT_ID?.trim() || "",
+    maxMessageChars: readNumber("RICHIE_AUDIT_MAX_MESSAGE_CHARS", 2000),
+  },
   codex: {
     enabled: readBoolean("BOT_CODEX_ENABLED", true),
     prefix: (process.env.BOT_CODEX_PREFIX || "/codex").trim(),

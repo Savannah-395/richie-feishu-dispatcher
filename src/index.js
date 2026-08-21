@@ -50,6 +50,155 @@ function getAuthorName(message) {
   return message.senderName || message.senderId || "unknown";
 }
 
+function isGroupChatId(chatId) {
+  return /^oc_/i.test(chatId || "");
+}
+
+function truncateText(value, maxChars = 2000) {
+  const text = `${value || ""}`.trim();
+  if (text.length <= maxChars) {
+    return text;
+  }
+  return `${text.slice(0, Math.max(0, maxChars - 20)).trimEnd()}\n...[truncated]`;
+}
+
+function redactSensitiveText(value) {
+  return `${value || ""}`
+    .replace(/\b(Bearer\s+)(?!oc_)[A-Za-z0-9._~+/=-]{20,}\b/gi, "$1[redacted]")
+    .replace(/\b(api[_ -]?key|token|secret|password|authorization)\s*[:=]\s*(?!oc_)[^\s,;]+/gi, "$1=[redacted]")
+    .replace(/\b(?!oc_)[A-Za-z0-9_-]{56,}\b/g, "[redacted-token]");
+}
+
+function auditPreview(value, maxChars = 600) {
+  return truncateText(redactSensitiveText(value), maxChars) || "(empty)";
+}
+
+function formatQueueSnapshot(snapshot) {
+  if (!snapshot) {
+    return "unavailable";
+  }
+
+  const activeTopics = snapshot.activeTopics.length > 0
+    ? snapshot.activeTopics.join(", ")
+    : "none";
+  const queuedTopics = snapshot.queuedTopics.length > 0
+    ? snapshot.queuedTopics.map((item) => `${item.key} x${item.count}`).join(", ")
+    : "none";
+
+  return `active=${snapshot.activeCount} [${activeTopics}], queued=${snapshot.queuedCount} [${queuedTopics}], started=${snapshot.startedCount}, completed=${snapshot.completedCount}`;
+}
+
+function getSentMessageId(result) {
+  if (!result) {
+    return "";
+  }
+  if (typeof result === "string") {
+    return result;
+  }
+  return result.messageId
+    || result.message_id
+    || result.id
+    || result.data?.messageId
+    || result.data?.message_id
+    || result.chunkIds?.[0]
+    || result.chunk_ids?.[0]
+    || "";
+}
+
+function getSkillRouteLabel(skillRoute, executionKind) {
+  if (skillRoute?.skillKey) {
+    return skillRoute.skillKey;
+  }
+  if (skillRoute?.projectName) {
+    return skillRoute.projectName;
+  }
+  return executionKind || "ordinary-reply";
+}
+
+function getExecutionPlan({ skillRoute, executionKind }) {
+  if (skillRoute) {
+    return "Validate the chat route, read the routed SKILL.md, run the project-specific workflow locally, then send the result back to the Feishu topic.";
+  }
+  if (executionKind === "full-access") {
+    return "Run the requested local-computer task with full access, collect returnable artifacts, then send the result back to the Feishu topic.";
+  }
+  if (executionKind === "forced-codex") {
+    return "Run the explicit Codex task locally, collect returnable artifacts, then send the result back to the Feishu topic.";
+  }
+  if (executionKind === "auto-codex") {
+    return "Use Codex because the request needs local files, attachments, skills, or command execution, then send the result back to the Feishu topic.";
+  }
+  return "Use the ordinary reply fallback with the current Feishu topic context.";
+}
+
+async function sendAuditMessage(markdown, { replyTo = "" } = {}) {
+  if (!config.audit.enabled || !config.audit.chatId) {
+    return undefined;
+  }
+
+  const safeMarkdown = truncateText(redactSensitiveText(markdown), config.audit.maxMessageChars);
+  const options = replyTo
+    ? { replyTo, replyInThread: true }
+    : {};
+
+  try {
+    const result = await channel.send(config.audit.chatId, { markdown: safeMarkdown }, options);
+    return {
+      messageId: getSentMessageId(result),
+      result,
+    };
+  } catch (error) {
+    console.warn("Failed to send audit message", error);
+    return undefined;
+  }
+}
+
+async function sendAuditStart({ message, topicId, userEntry, skillRoute, executionKind, task, queueSnapshot }) {
+  return sendAuditMessage([
+    "Richie audit: started",
+    `- Task: ${task?.taskId || executionKind || "unknown"}`,
+    `- Source chat: ${message.chatId}`,
+    `- Topic: ${topicId}`,
+    `- Source message: ${message.messageId}`,
+    `- User: ${auditPreview(getAuthorName(message), 120)}`,
+    `- Request: ${auditPreview(userEntry?.content || message.content, 500)}`,
+    `- Route: ${getSkillRouteLabel(skillRoute, executionKind)}`,
+    `- Route source: ${skillRoute?.source || "fallback"}`,
+    `- Route reason: ${skillRoute?.reason || "no project skill matched"}`,
+    `- Plan: ${getExecutionPlan({ skillRoute, executionKind })}`,
+    task?.runDir ? `- Run dir: ${task.runDir}` : "",
+    `- Queue: ${formatQueueSnapshot(queueSnapshot)}`,
+  ].filter(Boolean).join("\n"));
+}
+
+async function sendAuditFinish(auditStart, { message, skillRoute, executionKind, result, finalMessage, error, queueSnapshot }) {
+  const status = error
+    ? `failed: ${error.message}`
+    : result?.timedOut
+      ? "timed out"
+      : result?.exitCode == null || result.exitCode === 0
+        ? "completed"
+        : `exited with code ${result.exitCode}`;
+  const artifacts = result?.artifacts?.length > 0
+    ? result.artifacts.map((artifact) => artifact.fileName || path.basename(artifact.path)).join(", ")
+    : "none";
+
+  return sendAuditMessage([
+    "Richie audit: finished",
+    `- Task: ${result?.taskId || executionKind || "unknown"}`,
+    `- Status: ${status}`,
+    `- Source chat: ${message.chatId}`,
+    `- Source message: ${message.messageId}`,
+    `- Route: ${getSkillRouteLabel(skillRoute, executionKind)}`,
+    result?.runDir ? `- Run dir: ${result.runDir}` : "",
+    `- Artifacts: ${artifacts}`,
+    `- Final reply preview: ${auditPreview(finalMessage || result?.finalMessage || "", 700)}`,
+    `- Queue: ${formatQueueSnapshot(queueSnapshot)}`,
+  ].filter(Boolean).join("\n"), {
+    replyTo: auditStart?.messageId || "",
+  });
+}
+
 function shouldUseCodex(content) {
   const normalized = (content || "").trim();
   const localActionPatterns = [
@@ -217,6 +366,10 @@ function getIgnoreReason(message) {
     return `chat ${message.chatId} is not in BOT_ALLOWED_CHAT_IDS`;
   }
 
+  if (config.audit.chatId && message.chatId === config.audit.chatId) {
+    return "audit chat is output-only";
+  }
+
   if (message.senderName && config.feishu.displayName && message.senderName.toLowerCase() === config.feishu.displayName.toLowerCase()) {
     return "sender name matches bot display name";
   }
@@ -345,10 +498,21 @@ async function handleMessage(message) {
   }
 
   const topicId = getTopicId(message);
+  let initialSkillRoute;
+  if (config.codex.enabled && message.chatId) {
+    try {
+      initialSkillRoute = await resolveRepositorySkillRoute(message, message.content || "");
+    } catch (error) {
+      console.warn(`Failed to resolve repository skill route for message ${message.messageId}`, error);
+    }
+  }
+
+  const groupMessage = isGroupChatId(message.chatId);
   const topicActive = store.isActive(topicId);
-  const shouldReply = config.feishu.requireMentionToReply
-    ? message.mentionedBot
-    : topicActive || !config.feishu.requireMentionToStart || message.mentionedBot;
+  const shouldReply = groupMessage
+    || (config.feishu.requireMentionToReply
+      ? message.mentionedBot
+      : topicActive || !config.feishu.requireMentionToStart || message.mentionedBot);
 
   if (!shouldReply) {
     const reason = config.feishu.requireMentionToReply
@@ -387,9 +551,7 @@ async function handleMessage(message) {
         ? getMatchedPrefix(messageContent, config.codex.fullAccessPrefixes)
         : "";
       const forcedCodex = config.codex.enabled && isCodexCommand(messageContent, config.codex.prefix);
-      const skillRoute = config.codex.enabled
-        ? await resolveRepositorySkillRoute(message, messageContent)
-        : undefined;
+      const skillRoute = config.codex.enabled ? initialSkillRoute : undefined;
       const routedCodex = config.codex.enabled && (
         fullAccessPrefix ||
         forcedCodex ||
@@ -442,6 +604,14 @@ async function handleMessage(message) {
           return;
         }
 
+        const executionKind = skillRoute
+          ? "skill-routed"
+          : fullAccessPrefix
+            ? "full-access"
+            : forcedCodex
+              ? "forced-codex"
+              : "auto-codex";
+        let auditStart;
         const codexOptions = fullAccessPrefix
           ? {
               sandbox: config.codex.fullAccessSandbox,
@@ -451,50 +621,109 @@ async function handleMessage(message) {
           : {
               attachments: attachmentResult.attachments,
             };
+        codexOptions.onStart = async (task) => {
+          auditStart = await sendAuditStart({
+            message,
+            topicId,
+            userEntry,
+            skillRoute,
+            executionKind,
+            task,
+            queueSnapshot: queue.snapshot(),
+          });
+        };
         console.log(
           `Running ${skillRoute ? `skill-routed ${skillRoute.skillKey || skillRoute.projectName}` : fullAccessPrefix ? "full-access" : forcedCodex ? "forced" : "auto-routed"} Codex task for message ${message.messageId} in topic ${topicId}`,
         );
-        const result = await runCodexTask(config.codex, buildCodexPrompt({
-          latestMessage: codexPrompt || userEntry.content,
-          threadTranscript,
-          skillRoute,
-        }), codexOptions);
-        await sendCodexResult(message, result);
-        console.log(`Sent Codex task ${result.taskId} result for message ${message.messageId}`);
-        await markComplete();
-        store.append(topicId, {
-          role: "assistant",
-          author: "bot",
-          content: result.finalMessage,
-        });
+        let result;
+        try {
+          result = await runCodexTask(config.codex, buildCodexPrompt({
+            latestMessage: codexPrompt || userEntry.content,
+            threadTranscript,
+            skillRoute,
+          }), codexOptions);
+          await sendCodexResult(message, result);
+          await sendAuditFinish(auditStart, {
+            message,
+            skillRoute,
+            executionKind,
+            result,
+            queueSnapshot: queue.snapshot(),
+          });
+          console.log(`Sent Codex task ${result.taskId} result for message ${message.messageId}`);
+          await markComplete();
+          store.append(topicId, {
+            role: "assistant",
+            author: "bot",
+            content: result.finalMessage,
+          });
+        } catch (error) {
+          await sendAuditFinish(auditStart, {
+            message,
+            skillRoute,
+            executionKind,
+            result,
+            error,
+            queueSnapshot: queue.snapshot(),
+          });
+          throw error;
+        }
         return;
       }
 
       console.log(`Generating reply for message ${message.messageId} in topic ${topicId}`);
-      const reply = await generateThreadReply(openai, config.openai, {
+      const executionKind = "ordinary-reply";
+      const auditStart = await sendAuditStart({
+        message,
         topicId,
-        senderName: userEntry.author,
-        latestMessage: userEntry.content,
-        threadTranscript,
+        userEntry,
+        skillRoute: undefined,
+        executionKind,
+        task: { taskId: `reply-${message.messageId}` },
+        queueSnapshot: queue.snapshot(),
       });
+      let reply = "";
+      try {
+        reply = await generateThreadReply(openai, config.openai, {
+          topicId,
+          senderName: userEntry.author,
+          latestMessage: userEntry.content,
+          threadTranscript,
+        });
 
-      await channel.send(
-        message.chatId,
-        { markdown: reply },
-        {
-          replyTo: message.messageId,
-          replyInThread: true,
-        },
-      );
+        await channel.send(
+          message.chatId,
+          { markdown: reply },
+          {
+            replyTo: message.messageId,
+            replyInThread: true,
+          },
+        );
 
-      console.log(`Sent reply for message ${message.messageId} in topic ${topicId}`);
-      await markComplete();
+        await sendAuditFinish(auditStart, {
+          message,
+          executionKind,
+          finalMessage: reply,
+          queueSnapshot: queue.snapshot(),
+        });
+        console.log(`Sent reply for message ${message.messageId} in topic ${topicId}`);
+        await markComplete();
 
-      store.append(topicId, {
-        role: "assistant",
-        author: "bot",
-        content: reply,
-      });
+        store.append(topicId, {
+          role: "assistant",
+          author: "bot",
+          content: reply,
+        });
+      } catch (error) {
+        await sendAuditFinish(auditStart, {
+          message,
+          executionKind,
+          finalMessage: reply,
+          error,
+          queueSnapshot: queue.snapshot(),
+        });
+        throw error;
+      }
     });
   } catch (error) {
     console.error("Failed to process message", error);
