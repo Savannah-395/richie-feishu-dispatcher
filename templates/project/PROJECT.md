@@ -1,11 +1,11 @@
 ---
 name: project-template
-description: Template project folder for richie Git-synced skills.
+description: Template sibling project folder for richie Git-synced skills.
 ---
 
 # project-template
 
-Use this folder as a template when creating a new richie project.
+Use this folder as a template for a business project that sits next to `richie-feishu-dispatcher`.
 
 ## Scope
 
@@ -17,6 +17,7 @@ Describe what this project owns, what data or systems it may touch, and when ric
 
 ## Notes
 
+- This project folder should live as a sibling of the dispatcher folder.
 - Keep project-specific references under this project folder.
 - Put shared workflow logic in each skill's `SKILL.md`.
 - Prefer explicit project/skill names in Feishu prompts.

@@ -39,14 +39,13 @@ function formatSkillLine(skill) {
 }
 
 async function buildSkillInstructions(config) {
-  const { projectsRoot, legacySkillsRoot, skills } = await listRepositorySkills({
-    projectsDir: config.projectsDir || "projects",
-    skillsDir: config.skillsDir || "skills",
+  const { projectRoots, skills } = await listRepositorySkills({
+    projectRoots: config.projectRoots,
   });
   const lines = [
-    "Richie Git-synced project skills:",
-    `- Repository projects directory: ${projectsRoot}`,
-    `- Legacy flat skills directory: ${legacySkillsRoot}`,
+    "Richie Git-synced sibling project skills:",
+    `- Sibling project root directories: ${projectRoots.join(", ")}`,
+    "- richie-feishu-dispatcher is the runner repository and is not itself a business project.",
   ];
 
   if (config.codexSkillsDir) {

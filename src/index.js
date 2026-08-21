@@ -182,13 +182,13 @@ async function sendCodexResult(message, result) {
 }
 
 async function sendSkillList(message) {
-  const { projectsRoot, legacySkillsRoot, skills } = await listRepositorySkills(config.sync);
+  const { projectRoots, skills } = await listRepositorySkills(config.sync);
   const lines = [
-    `richie 当前项目目录：${projectsRoot}`,
-    `兼容旧 skill 目录：${legacySkillsRoot}`,
+    `richie 当前同级项目根目录：${projectRoots.join(", ")}`,
+    "`richie-feishu-dispatcher` 只是后台 runner，不作为业务项目扫描。",
     "",
     skills.length === 0
-      ? "当前还没有可用 skill。把项目推到 `projects/<项目名>/skills/<skill名>/SKILL.md` 后，richie 会在下一次同步时加载。"
+      ? "当前还没有可用 skill。把项目 clone 到同级目录，并放置 `<项目名>/skills/<skill名>/SKILL.md` 后，richie 会在下一次同步时加载。"
       : "当前可用 project/skill：",
   ];
 

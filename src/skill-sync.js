@@ -133,40 +133,67 @@ async function scanSkillDirectory({ skillsRoot, projectName, projectPath, projec
   return skills;
 }
 
-export async function listRepositorySkills(syncConfig) {
-  const projectsRoot = resolveLocalPath(syncConfig.projectsDir || "projects");
-  const legacySkillsRoot = resolveLocalPath(syncConfig.skillsDir || "skills");
-  await mkdir(projectsRoot, { recursive: true });
-  await mkdir(legacySkillsRoot, { recursive: true });
+function getProjectRoots(syncConfig) {
+  const configured = Array.isArray(syncConfig.projectRoots) && syncConfig.projectRoots.length > 0
+    ? syncConfig.projectRoots
+    : [".."];
+  return [...new Set(configured.map(resolveLocalPath).map((item) => path.resolve(item)))];
+}
 
-  const skills = [];
-  const projectEntries = await readdir(projectsRoot, { withFileTypes: true });
+async function listSiblingProjects(syncConfig) {
+  const projectRoots = getProjectRoots(syncConfig);
+  const projects = [];
+  const dispatcherRoot = path.resolve(projectRoot);
+  const seen = new Set();
 
-  for (const projectEntry of projectEntries) {
-    if (!projectEntry.isDirectory() || projectEntry.name.startsWith(".") || projectEntry.name.startsWith("_")) {
-      continue;
+  for (const projectRootPath of projectRoots) {
+    await mkdir(projectRootPath, { recursive: true });
+    const entries = await readdir(projectRootPath, { withFileTypes: true });
+
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name.startsWith(".") || entry.name.startsWith("_")) {
+        continue;
+      }
+
+      const projectPath = path.resolve(projectRootPath, entry.name);
+      if (projectPath === dispatcherRoot || seen.has(projectPath)) {
+        continue;
+      }
+
+      const projectMdPath = path.join(projectPath, "PROJECT.md");
+      const skillsRoot = path.join(projectPath, "skills");
+      if (!(await pathExists(projectMdPath)) && !(await pathExists(skillsRoot))) {
+        continue;
+      }
+
+      seen.add(projectPath);
+      const projectSummary = await summarizeMarkdownFile(projectMdPath);
+      projects.push({
+        name: entry.name,
+        path: projectPath,
+        title: projectSummary.title || entry.name,
+        skillsRoot,
+      });
     }
+  }
 
-    const projectPath = path.join(projectsRoot, projectEntry.name);
-    const projectMdPath = path.join(projectPath, "PROJECT.md");
-    const projectSummary = await summarizeMarkdownFile(projectMdPath);
+  return { projectRoots, projects };
+}
+
+export async function listRepositorySkills(syncConfig) {
+  const { projectRoots, projects } = await listSiblingProjects(syncConfig);
+  const skills = [];
+
+  for (const project of projects) {
     skills.push(...await scanSkillDirectory({
-      skillsRoot: path.join(projectPath, "skills"),
-      projectName: projectEntry.name,
-      projectPath,
-      projectTitle: projectSummary.title || projectEntry.name,
+      skillsRoot: project.skillsRoot,
+      projectName: project.name,
+      projectPath: project.path,
+      projectTitle: project.title,
     }));
   }
 
-  skills.push(...await scanSkillDirectory({
-    skillsRoot: legacySkillsRoot,
-    projectName: "legacy",
-    projectPath: legacySkillsRoot,
-    projectTitle: "legacy",
-    legacy: true,
-  }));
-
-  return { projectsRoot, legacySkillsRoot, skillsRoot: projectsRoot, skills };
+  return { projectRoots, projects, skills };
 }
 
 async function pullLatest(syncConfig) {
@@ -193,6 +220,42 @@ async function pullLatest(syncConfig) {
   return { skipped: false, ok: true, message: (result.stdout || "Already up to date.").trim() };
 }
 
+async function pullSiblingProjects(syncConfig) {
+  const { projects } = await listSiblingProjects(syncConfig);
+  const results = [];
+
+  for (const project of projects) {
+    if (!existsSync(path.join(project.path, ".git"))) {
+      results.push({ project: project.name, skipped: true, message: "not a git repository" });
+      continue;
+    }
+
+    const result = await runCommand("git", ["pull", "--ff-only"], {
+      cwd: project.path,
+      timeoutMs: 120000,
+    });
+
+    if (result.code !== 0) {
+      results.push({
+        project: project.name,
+        skipped: false,
+        ok: false,
+        message: (result.stderr || result.stdout || "git pull failed").trim(),
+      });
+      continue;
+    }
+
+    results.push({
+      project: project.name,
+      skipped: false,
+      ok: true,
+      message: (result.stdout || "Already up to date.").trim(),
+    });
+  }
+
+  return results;
+}
+
 async function installCodexSkills(syncConfig) {
   if (!syncConfig.installCodexSkills) {
     return { installed: [], skipped: [], removed: [], message: "Codex skill install disabled" };
@@ -201,7 +264,7 @@ async function installCodexSkills(syncConfig) {
   const targetRoot = resolveLocalPath(syncConfig.codexSkillsDir);
   await mkdir(targetRoot, { recursive: true });
 
-  const { projectsRoot, legacySkillsRoot, skills } = await listRepositorySkills(syncConfig);
+  const { projectRoots, skills } = await listRepositorySkills(syncConfig);
   const manifestPath = path.join(targetRoot, managedManifestName);
   const previousManifest = await readJson(manifestPath, { managedTargets: [] });
   const previousTargets = new Set(Array.isArray(previousManifest.managedTargets) ? previousManifest.managedTargets : []);
@@ -265,8 +328,7 @@ async function installCodexSkills(syncConfig) {
   }
 
   await writeFile(manifestPath, JSON.stringify({
-    projectsRoot,
-    legacySkillsRoot,
+    projectRoots,
     updatedAt: new Date().toISOString(),
     managedTargets: installed.map((item) => item.targetName),
   }, null, 2), "utf8");
@@ -279,11 +341,22 @@ export async function runSyncOnce(syncConfig, reason = "manual") {
 
   const pull = await pullLatest(syncConfig);
   if (pull.skipped) {
-    console.log(`[richie-sync] git pull skipped: ${pull.message}`);
+    console.log(`[richie-sync] dispatcher git pull skipped: ${pull.message}`);
   } else if (pull.ok) {
-    console.log(`[richie-sync] git pull ok: ${pull.message}`);
+    console.log(`[richie-sync] dispatcher git pull ok: ${pull.message}`);
   } else {
-    console.warn(`[richie-sync] git pull failed: ${pull.message}`);
+    console.warn(`[richie-sync] dispatcher git pull failed: ${pull.message}`);
+  }
+
+  const projectPulls = await pullSiblingProjects(syncConfig);
+  for (const projectPull of projectPulls) {
+    if (projectPull.skipped) {
+      console.log(`[richie-sync] project ${projectPull.project} pull skipped: ${projectPull.message}`);
+    } else if (projectPull.ok) {
+      console.log(`[richie-sync] project ${projectPull.project} pull ok: ${projectPull.message}`);
+    } else {
+      console.warn(`[richie-sync] project ${projectPull.project} pull failed: ${projectPull.message}`);
+    }
   }
 
   const install = await installCodexSkills(syncConfig);
@@ -295,7 +368,7 @@ export async function runSyncOnce(syncConfig, reason = "manual") {
     console.warn(`[richie-sync] skipped skill ${item.name}: ${item.reason}`);
   }
 
-  return { pull, install };
+  return { pull, projectPulls, install };
 }
 
 export function startGitSync(syncConfig) {

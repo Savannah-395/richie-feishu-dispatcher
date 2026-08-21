@@ -1,14 +1,42 @@
 # richie Feishu dispatcher
 
-这是本机给飞书机器人 `richie` 跑的后台：通过飞书长连接收消息，在原话题内回复；需要本机文件、截图、表格、代码、或 skill 的任务会转给本机 Codex CLI 执行。
+这是本机给飞书机器人 `richie` 跑的后台。它只负责飞书长连接、消息路由、本机 Codex CLI 执行、以及从同级业务项目里发现 skills。
 
-参考压缩包里的 `Lark Claude Plugins`，这里保留核心思路：
+`richie-feishu-dispatcher` 是 runner/基础设施仓库，不是业务项目。业务项目应该和它放在同一层级，可以是独立 GitHub 仓库，也可以是同级文件夹。
 
-- 飞书长连接只作为消息入口，不需要公网回调地址
-- 每个飞书话题独立排队，避免同一话题并发串上下文
-- Codex 任务在本机执行，产物放进 `logs/codex-runs/<taskId>/artifacts`
-- 机器人始终以 `richie` 身份提示，不使用参考项目里的机器人身份
-- 仓库里的 `projects/` 每 10 分钟从 GitHub 拉取一次，并按项目镜像到本机 Codex skills
+推荐本机布局：
+
+```text
+workspace/
+  richie-feishu-dispatcher/       # 本仓库，只运行后台
+  amazon-spc-wall-panel/          # 业务项目仓库/文件夹
+    PROJECT.md
+    skills/
+      research/
+        SKILL.md
+        references/
+        scripts/
+        assets/
+  supplier-pricing/               # 另一个业务项目仓库/文件夹
+    PROJECT.md
+    skills/
+      research/
+        SKILL.md
+```
+
+richie 会扫描 `RICHIE_PROJECT_ROOTS` 指定目录下的同级项目，跳过 `richie-feishu-dispatcher` 自己。每个项目的可调用 skill 是：
+
+```text
+<project-name>/<skill-name>
+```
+
+安装到本机 Codex user skills 时会自动加项目作用域：
+
+```text
+<project-name>--<skill-name>
+```
+
+这样不同项目都可以有 `research`、`report` 这类同名 skill，不会互相覆盖。飞书里调用时尽量说清项目，例如“用 `amazon-spc-wall-panel/research` 调研美国站 SPC 墙板”。如果只说 `research` 且多个项目都有，richie 应该先问你用哪个项目。
 
 ## 目录
 
@@ -16,12 +44,9 @@
 src/
   index.js            # 飞书长连接入口和消息路由
   codex-runner.js     # 启动本机 Codex CLI
-  skill-sync.js       # git pull + skills 安装
-projects/
-  README.md           # 项目级目录约定
-  _template/          # 项目模板，不会被安装
-skills/
-  README.md           # 旧平铺 skill 结构兼容入口
+  skill-sync.js       # git pull + 同级项目 skill 安装
+templates/
+  project/            # 新业务项目模板，复制到 dispatcher 同级目录使用
 scripts/
   start-richie-background.ps1
   sync-richie-skills.ps1
@@ -37,8 +62,6 @@ scripts/
 - `OPENAI_BASE_URL`
 - `OPENAI_MODEL`
 
-`BOT_DISPLAY_NAME` 默认是 `richie`。如果飞书后台显示名大小写不同，也建议这里保持同名。
-
 回复策略默认是话题第一条消息必须 @ richie，后续同一话题内继续交互不用重复 @：
 
 ```env
@@ -46,25 +69,20 @@ BOT_REQUIRE_MENTION_TO_START=true
 BOT_REQUIRE_MENTION_TO_REPLY=false
 ```
 
-`BOT_REQUIRE_MENTION_TO_START=true` 表示一个新话题必须先 @ richie 才会被激活。`BOT_REQUIRE_MENTION_TO_REPLY=false` 表示话题激活后，后续同一话题里的消息可以继续触发 richie 回复。
-
-GitHub 同步相关默认值：
+同级项目扫描配置：
 
 ```env
 RICHIE_GIT_SYNC_ENABLED=true
 RICHIE_GIT_SYNC_INTERVAL_SECONDS=600
 RICHIE_GIT_REMOTE=origin
 RICHIE_GIT_BRANCH=
-RICHIE_PROJECTS_DIR=projects
-RICHIE_SKILLS_DIR=skills
+RICHIE_PROJECT_ROOTS=..
 RICHIE_INSTALL_CODEX_SKILLS=true
 RICHIE_CODEX_SKILLS_DIR=
 RICHIE_SKILL_PREFIX=
 ```
 
-`RICHIE_PROJECTS_DIR` 是主目录。`RICHIE_SKILLS_DIR` 只保留给早期平铺 skill 的兼容结构。
-
-`RICHIE_CODEX_SKILLS_DIR` 留空时默认使用 `%USERPROFILE%\.codex\skills`。
+`RICHIE_PROJECT_ROOTS=..` 表示扫描 dispatcher 父目录下的同级项目。多个根目录可用英文逗号分隔。richie 会对已存在且本身是 git repo 的同级项目执行 `git pull --ff-only`，但不会自动 clone 尚未在本机存在的新仓库。
 
 ## 启动
 
@@ -86,53 +104,21 @@ powershell -ExecutionPolicy Bypass -File scripts\start-richie-background.ps1
 powershell -ExecutionPolicy Bypass -File scripts\start-richie-background.ps1 -Restart
 ```
 
-## GitHub project / skill 工作流
+## 同级业务项目工作流
 
-仓库按项目分目录，一个项目一个文件夹：
+创建新业务项目时，把模板复制到和 dispatcher 同级的位置：
 
 ```text
-projects/
-  amazon-spc-wall-panel/
+workspace/
+  richie-feishu-dispatcher/
+  your-project-name/
     PROJECT.md
     skills/
-      research/
-        SKILL.md
-        references/
-        scripts/
-        assets/
-      report/
-        SKILL.md
-  supplier-pricing/
-    PROJECT.md
-    skills/
-      research/
+      your-skill-name/
         SKILL.md
 ```
 
-richie 会把项目 skill 安装成本机 Codex skill 名：
-
-```text
-<project-name>--<skill-name>
-```
-
-比如：
-
-```text
-amazon-spc-wall-panel/research -> amazon-spc-wall-panel--research
-supplier-pricing/research -> supplier-pricing--research
-```
-
-这样不同项目可以有同名 skill，不会互相覆盖。飞书里要调用时，尽量说清项目和 skill，例如“用 `amazon-spc-wall-panel/research` 调研美国站 SPC 墙板”。如果只说 `research` 且多个项目都有，richie 应该先问你用哪个项目。
-
-在其他电脑上新增或修改 skill 后：
-
-```bash
-git add projects/amazon-spc-wall-panel
-git commit -m "Update amazon SPC wall panel skills"
-git push
-```
-
-本机 richie 后台会启动即同步一次，之后每 10 分钟执行一次 `git pull --ff-only`。同步后会扫描 `projects/<project>/skills/<skill>/SKILL.md`，并把有效 skill 镜像到 Codex user skills 目录。
+如果 AmandaYYL 在其他电脑维护项目 repo，他只需要推业务项目仓库；本机这里需要先把该项目 clone 到 dispatcher 同级目录一次。之后 richie 每 10 分钟会自动 pull 已 clone 的同级项目。
 
 手动同步一次：
 
@@ -140,7 +126,7 @@ git push
 npm run sync:once
 ```
 
-飞书里查看当前同步到本机的 skill：
+飞书里查看当前本机已发现的同级项目 skill：
 
 ```text
 /skills
