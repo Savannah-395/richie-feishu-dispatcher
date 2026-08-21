@@ -30,6 +30,25 @@ function createTaskId() {
   return `${timestamp}-${suffix}`;
 }
 
+function terminateProcessTree(child) {
+  if (!child.pid || child.exitCode != null) {
+    return;
+  }
+
+  if (process.platform === "win32") {
+    const killer = spawn("taskkill", ["/pid", `${child.pid}`, "/T", "/F"], {
+      windowsHide: true,
+      stdio: "ignore",
+    });
+    killer.on("error", () => {
+      child.kill("SIGTERM");
+    });
+    return;
+  }
+
+  child.kill("SIGTERM");
+}
+
 function formatSkillLine(skill) {
   const label = skill.title && skill.title !== skill.name ? `${skill.key} (${skill.title})` : skill.key;
   const projectLabel = skill.projectTitle && skill.projectTitle !== skill.projectName
@@ -121,7 +140,7 @@ function collectOutput(child, timeoutMs) {
     };
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGTERM");
+      terminateProcessTree(child);
     }, timeoutMs);
 
     child.stdout.on("data", (chunk) => {
