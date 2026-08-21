@@ -50,10 +50,6 @@ function getAuthorName(message) {
   return message.senderName || message.senderId || "unknown";
 }
 
-function isGroupChatId(chatId) {
-  return /^oc_/i.test(chatId || "");
-}
-
 function truncateText(value, maxChars = 2000) {
   const text = `${value || ""}`.trim();
   if (text.length <= maxChars) {
@@ -507,9 +503,8 @@ async function handleMessage(message) {
     }
   }
 
-  const groupMessage = isGroupChatId(message.chatId);
   const topicActive = store.isActive(topicId);
-  const shouldReply = groupMessage
+  const shouldReply = Boolean(initialSkillRoute)
     || (config.feishu.requireMentionToReply
       ? message.mentionedBot
       : topicActive || !config.feishu.requireMentionToStart || message.mentionedBot);

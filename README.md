@@ -108,7 +108,10 @@ RICHIE_GITHUB_PROJECT_REPOS=Savannah-395/project-a,Savannah-395/project-b
 
 私有 repo 的发现优先使用 `GITHUB_TOKEN` / `GH_TOKEN`；如果没有环境变量，会尝试读取本机 Git Credential Manager 里已有的 GitHub 凭据。clone 和 pull 不会把 token 写进仓库。
 
-回复策略默认是话题第一条消息必须 @ richie，后续同一话题内继续交互不需要重复 @：
+回复策略默认分两层：
+
+- 指定 skill 群：只要命中 `deploy/richie/allowed-chats.json` 或 skill description 里的 `chat_id`，不用 @，直接走该 skill。
+- 非指定 skill 群：话题第一条消息必须 @ richie，后续同一话题内继续交互不需要重复 @。
 
 ```env
 BOT_REQUIRE_MENTION_TO_START=true
@@ -176,7 +179,7 @@ npm run sync:once
 
 ## Dispatcher routing and audit
 
-Group messages are handled by the dispatcher first. If a project skill is mapped to the Feishu group `chat_id`, Richie runs that project skill. If no project skill matches, Richie falls back to the ordinary topic reply.
+Group messages are checked against dispatcher skill routes first. If a project skill is mapped to the Feishu group `chat_id`, Richie runs that project skill without requiring an @ mention. If no project skill matches, the normal mention policy applies: the first message in a topic must @ richie, then follow-up messages in that active topic do not need another @.
 
 Preferred project-side mapping:
 
