@@ -618,6 +618,12 @@ async function handleMessage(message) {
               workingRoot: config.codex.fullAccessRoot,
               attachments: attachmentResult.attachments,
             }
+          : skillRoute?.sandbox
+            ? {
+                sandbox: skillRoute.sandbox,
+                workingRoot: skillRoute.workingRoot || skillRoute.projectPath || undefined,
+                attachments: attachmentResult.attachments,
+              }
           : {
               attachments: attachmentResult.attachments,
             };

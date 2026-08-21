@@ -219,10 +219,17 @@ function findConfiguredSkill(projectSkills, routeConfig) {
   return projectSkills.length === 1 ? projectSkills[0] : undefined;
 }
 
-function buildSkillRoute({ project, skill, chatIds, configPath, source }) {
+function buildSkillRoute({ project, skill, chatIds, configPath, routeConfig = {}, source }) {
+  const configuredWorkingRoot = routeConfig.working_root || routeConfig.workingRoot || "";
+  const workingRoot = configuredWorkingRoot
+    ? path.resolve(path.isAbsolute(configuredWorkingRoot) ? configuredWorkingRoot : path.join(project.path, configuredWorkingRoot))
+    : "";
+
   return {
     source,
     chatIds,
+    sandbox: routeConfig.sandbox || routeConfig.codex_sandbox || routeConfig.codexSandbox || "",
+    workingRoot,
     projectName: project.name,
     projectTitle: project.title,
     projectPath: project.path,
@@ -667,6 +674,7 @@ export async function listRepositorySkillRoutes(syncConfig) {
         skill: defaultSkill,
         chatIds: defaultChatIds,
         configPath,
+        routeConfig,
         source: "project-allowed-chats",
       }));
     }
@@ -688,6 +696,7 @@ export async function listRepositorySkillRoutes(syncConfig) {
         skill,
         chatIds,
         configPath,
+        routeConfig: entry,
         source: "skill-route",
       }));
     }
