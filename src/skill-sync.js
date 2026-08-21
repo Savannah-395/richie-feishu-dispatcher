@@ -8,6 +8,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
 const managedMarkerName = ".richie-managed";
 const managedManifestName = ".richie-managed.json";
+const projectRepoManifestName = "richie-project-repos.json";
 
 function resolveLocalPath(value) {
   return path.isAbsolute(value) ? value : path.join(projectRoot, value);
@@ -15,6 +16,10 @@ function resolveLocalPath(value) {
 
 function isValidSkillTargetName(name) {
   return Boolean(name) && name !== "." && name !== ".." && !/[<>:"/\\|?*\x00-\x1F]/.test(name);
+}
+
+function isValidProjectDirectoryName(name) {
+  return isValidSkillTargetName(name) && !name.startsWith(".") && !name.startsWith("_");
 }
 
 function assertInside(parent, child) {
@@ -25,12 +30,12 @@ function assertInside(parent, child) {
   }
 }
 
-function runCommand(command, args, { cwd = projectRoot, timeoutMs = 120000 } = {}) {
+function runCommand(command, args, { cwd = projectRoot, timeoutMs = 120000, input = "" } = {}) {
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       cwd,
       windowsHide: true,
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
       env: {
         ...process.env,
         GIT_TERMINAL_PROMPT: "0",
@@ -59,6 +64,11 @@ function runCommand(command, args, { cwd = projectRoot, timeoutMs = 120000 } = {
       clearTimeout(timer);
       resolve({ code, stdout, stderr, timedOut });
     });
+
+    if (input) {
+      child.stdin.write(input);
+    }
+    child.stdin.end();
   });
 }
 
@@ -79,6 +89,25 @@ async function readJson(filePath, fallback) {
   }
 }
 
+function projectRepoManifestPath() {
+  return path.join(projectRoot, "logs", projectRepoManifestName);
+}
+
+async function readProjectRepoManifest() {
+  const manifest = await readJson(projectRepoManifestPath(), { repositories: [] });
+  const repositories = Array.isArray(manifest.repositories) ? manifest.repositories : [];
+  return { repositories };
+}
+
+async function writeProjectRepoManifest(repositories) {
+  const manifestPath = projectRepoManifestPath();
+  await mkdir(path.dirname(manifestPath), { recursive: true });
+  await writeFile(manifestPath, JSON.stringify({
+    updatedAt: new Date().toISOString(),
+    repositories,
+  }, null, 2), "utf8");
+}
+
 function summarizeSkill(skillMd) {
   const lines = skillMd.split(/\r?\n/);
   const title = lines.find((line) => line.startsWith("# "))?.replace(/^#\s+/, "").trim() || "";
@@ -95,7 +124,7 @@ async function summarizeMarkdownFile(filePath) {
   }
 }
 
-async function scanSkillDirectory({ skillsRoot, projectName, projectPath, projectTitle, legacy = false }) {
+async function scanSkillDirectory({ skillsRoot, projectName, projectPath, projectTitle }) {
   if (!(await pathExists(skillsRoot))) {
     return [];
   }
@@ -126,7 +155,6 @@ async function scanSkillDirectory({ skillsRoot, projectName, projectPath, projec
       path: skillPath,
       skillMdPath,
       projectPath,
-      legacy,
     });
   }
 
@@ -140,6 +168,296 @@ function getProjectRoots(syncConfig) {
   return [...new Set(configured.map(resolveLocalPath).map((item) => path.resolve(item)))];
 }
 
+function getCloneRoot(syncConfig, projectRoots) {
+  return path.resolve(resolveLocalPath(syncConfig.githubProjectCloneRoot || projectRoots[0] || ".."));
+}
+
+async function hasRichieProjectMarkers(projectPath) {
+  return await pathExists(path.join(projectPath, "PROJECT.md"))
+    || await pathExists(path.join(projectPath, "skills"));
+}
+
+function parseGitHubRepositorySpec(value, defaultOwner = "") {
+  const raw = (value || "").trim();
+  if (!raw) {
+    return undefined;
+  }
+
+  let match = raw.match(/^https?:\/\/github\.com\/([^/]+)\/([^/#?]+?)(?:\.git)?\/?$/i)
+    || raw.match(/^git@github\.com:([^/]+)\/(.+?)(?:\.git)?$/i)
+    || raw.match(/^([^/\s]+)\/([^/\s]+)$/);
+
+  if (!match && defaultOwner && /^[A-Za-z0-9_.-]+$/.test(raw)) {
+    match = [raw, defaultOwner, raw];
+  }
+
+  if (!match) {
+    return undefined;
+  }
+
+  const owner = match[1].trim();
+  const name = match[2].trim().replace(/\.git$/i, "");
+  if (!owner || !name) {
+    return undefined;
+  }
+
+  return {
+    owner,
+    name,
+    fullName: `${owner}/${name}`,
+    cloneUrl: `https://github.com/${owner}/${name}.git`,
+  };
+}
+
+async function getCurrentRepository(syncConfig) {
+  const remote = syncConfig.remote || "origin";
+  const result = await runCommand("git", ["remote", "get-url", remote], { timeoutMs: 10000 });
+  if (result.code !== 0) {
+    return undefined;
+  }
+  return parseGitHubRepositorySpec(result.stdout.trim());
+}
+
+async function getGitHubTokenFromCredentialManager() {
+  const result = await runCommand("git", ["credential", "fill"], {
+    input: "protocol=https\nhost=github.com\n\n",
+    timeoutMs: 10000,
+  });
+  if (result.code !== 0) {
+    return "";
+  }
+
+  const passwordLine = result.stdout
+    .split(/\r?\n/)
+    .find((line) => line.startsWith("password="));
+  return passwordLine?.slice("password=".length).trim() || "";
+}
+
+async function getGitHubToken() {
+  return process.env.GITHUB_TOKEN?.trim()
+    || process.env.GH_TOKEN?.trim()
+    || await getGitHubTokenFromCredentialManager();
+}
+
+async function fetchGitHubJson(url, token) {
+  const headers = {
+    Accept: "application/vnd.github+json",
+    "User-Agent": "richie-feishu-dispatcher",
+  };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  const response = await fetch(url, { headers });
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`GitHub API ${response.status} ${response.statusText}: ${body.slice(0, 200)}`);
+  }
+  return response.json();
+}
+
+async function discoverGitHubRepositories(syncConfig, currentRepository) {
+  const defaultOwner = syncConfig.githubProjectOwner || currentRepository?.owner || "";
+  const explicitRepos = (syncConfig.githubProjectRepos || [])
+    .map((item) => parseGitHubRepositorySpec(item, defaultOwner))
+    .map((repo) => repo ? { ...repo, explicit: true } : repo)
+    .filter(Boolean);
+  const repos = [...explicitRepos];
+
+  if (syncConfig.githubAutoDiscoverProjectRepos && defaultOwner) {
+    const token = await getGitHubToken();
+    const discovered = [];
+
+    if (token) {
+      for (let page = 1; page <= 10; page += 1) {
+        const url = `https://api.github.com/user/repos?per_page=100&page=${page}&affiliation=owner,collaborator,organization_member&sort=updated`;
+        const batch = await fetchGitHubJson(url, token);
+        if (!Array.isArray(batch) || batch.length === 0) {
+          break;
+        }
+        discovered.push(...batch);
+      }
+    } else {
+      for (let page = 1; page <= 10; page += 1) {
+        const url = `https://api.github.com/users/${encodeURIComponent(defaultOwner)}/repos?per_page=100&page=${page}&sort=updated`;
+        const batch = await fetchGitHubJson(url, "");
+        if (!Array.isArray(batch) || batch.length === 0) {
+          break;
+        }
+        discovered.push(...batch);
+      }
+    }
+
+    for (const repo of discovered) {
+      const owner = repo.owner?.login || "";
+      const name = repo.name || "";
+      if (!owner || !name || owner.toLowerCase() !== defaultOwner.toLowerCase()) {
+        continue;
+      }
+      repos.push({
+        owner,
+        name,
+        fullName: `${owner}/${name}`,
+        cloneUrl: repo.clone_url || `https://github.com/${owner}/${name}.git`,
+        explicit: false,
+      });
+    }
+  }
+
+  const currentFullName = currentRepository?.fullName?.toLowerCase();
+  const seen = new Set();
+  return repos.filter((repo) => {
+    const fullName = repo.fullName.toLowerCase();
+    if (fullName === currentFullName || seen.has(fullName)) {
+      return false;
+    }
+    seen.add(fullName);
+    return true;
+  });
+}
+
+async function syncGitHubProjectRepositories(syncConfig) {
+  const projectRoots = getProjectRoots(syncConfig);
+  const cloneRoot = getCloneRoot(syncConfig, projectRoots);
+  const currentRepository = await getCurrentRepository(syncConfig);
+  const manifest = await readProjectRepoManifest();
+  const managedRepositories = new Map(manifest.repositories.map((repo) => [repo.fullName?.toLowerCase(), repo]));
+  const managedPaths = new Set(manifest.repositories
+    .map((repo) => repo.targetPath ? path.resolve(repo.targetPath) : "")
+    .filter(Boolean));
+  const results = [];
+
+  if (!syncConfig.githubAutoDiscoverProjectRepos && (!syncConfig.githubProjectRepos || syncConfig.githubProjectRepos.length === 0)) {
+    return { cloneRoot, repositories: [], results };
+  }
+
+  await mkdir(cloneRoot, { recursive: true });
+
+  let repositories = [];
+  try {
+    repositories = await discoverGitHubRepositories(syncConfig, currentRepository);
+  } catch (error) {
+    results.push({
+      repository: syncConfig.githubProjectOwner || currentRepository?.owner || "GitHub",
+      action: "discover",
+      ok: false,
+      message: error.message,
+    });
+    return { cloneRoot, repositories: [], results };
+  }
+
+  for (const repo of repositories) {
+    if (!isValidProjectDirectoryName(repo.name)) {
+      results.push({
+        repository: repo.fullName,
+        action: "skip",
+        skipped: true,
+        message: `invalid local directory name '${repo.name}'`,
+      });
+      continue;
+    }
+
+    const targetPath = path.join(cloneRoot, repo.name);
+    assertInside(cloneRoot, targetPath);
+
+    if (path.resolve(targetPath) === projectRoot) {
+      results.push({
+        repository: repo.fullName,
+        targetPath,
+        action: "skip",
+        skipped: true,
+        message: "target path is dispatcher root",
+      });
+      continue;
+    }
+
+    if (!(await pathExists(targetPath))) {
+      const clone = await runCommand("git", ["clone", "--depth", "1", "--filter=blob:none", repo.cloneUrl, targetPath], {
+        cwd: cloneRoot,
+        timeoutMs: 300000,
+      });
+      if (clone.code !== 0) {
+        results.push({
+          repository: repo.fullName,
+          targetPath,
+          action: "clone",
+          ok: false,
+          message: (clone.stderr || clone.stdout || "git clone failed").trim(),
+        });
+        continue;
+      }
+      results.push({
+        repository: repo.fullName,
+        targetPath,
+        action: "clone",
+        ok: true,
+        message: (clone.stdout || "cloned").trim(),
+      });
+      managedRepositories.set(repo.fullName.toLowerCase(), {
+        fullName: repo.fullName,
+        targetPath,
+        clonedAt: new Date().toISOString(),
+      });
+      continue;
+    }
+
+    if (!existsSync(path.join(targetPath, ".git"))) {
+      results.push({
+        repository: repo.fullName,
+        targetPath,
+        action: "skip",
+        skipped: true,
+        message: "local path exists but is not a git repository",
+      });
+      continue;
+    }
+
+    const targetIsManaged = managedRepositories.has(repo.fullName.toLowerCase()) || managedPaths.has(path.resolve(targetPath));
+    if (!repo.explicit && !targetIsManaged && !(await hasRichieProjectMarkers(targetPath))) {
+      results.push({
+        repository: repo.fullName,
+        targetPath,
+        action: "skip",
+        skipped: true,
+        message: "local repo exists but has no richie project markers; leaving it untouched",
+      });
+      continue;
+    }
+
+    const pull = await runCommand("git", ["pull", "--ff-only"], {
+      cwd: targetPath,
+      timeoutMs: 120000,
+    });
+    if (pull.code !== 0) {
+      results.push({
+        repository: repo.fullName,
+        targetPath,
+        action: "pull",
+        ok: false,
+        message: (pull.stderr || pull.stdout || "git pull failed").trim(),
+      });
+      continue;
+    }
+    results.push({
+      repository: repo.fullName,
+      targetPath,
+      action: "pull",
+      ok: true,
+      message: (pull.stdout || "Already up to date.").trim(),
+    });
+    managedRepositories.set(repo.fullName.toLowerCase(), {
+      fullName: repo.fullName,
+      targetPath,
+      clonedAt: managedRepositories.get(repo.fullName.toLowerCase())?.clonedAt,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+
+  await writeProjectRepoManifest([...managedRepositories.values()]);
+
+  return { cloneRoot, repositories, results };
+}
+
 async function listSiblingProjects(syncConfig) {
   const projectRoots = getProjectRoots(syncConfig);
   const projects = [];
@@ -151,7 +469,7 @@ async function listSiblingProjects(syncConfig) {
     const entries = await readdir(projectRootPath, { withFileTypes: true });
 
     for (const entry of entries) {
-      if (!entry.isDirectory() || entry.name.startsWith(".") || entry.name.startsWith("_")) {
+      if (!entry.isDirectory() || !isValidProjectDirectoryName(entry.name)) {
         continue;
       }
 
@@ -220,11 +538,15 @@ async function pullLatest(syncConfig) {
   return { skipped: false, ok: true, message: (result.stdout || "Already up to date.").trim() };
 }
 
-async function pullSiblingProjects(syncConfig) {
+async function pullSiblingProjects(syncConfig, excludedPaths = new Set()) {
   const { projects } = await listSiblingProjects(syncConfig);
   const results = [];
 
   for (const project of projects) {
+    if (excludedPaths.has(path.resolve(project.path))) {
+      continue;
+    }
+
     if (!existsSync(path.join(project.path, ".git"))) {
       results.push({ project: project.name, skipped: true, message: "not a git repository" });
       continue;
@@ -348,7 +670,23 @@ export async function runSyncOnce(syncConfig, reason = "manual") {
     console.warn(`[richie-sync] dispatcher git pull failed: ${pull.message}`);
   }
 
-  const projectPulls = await pullSiblingProjects(syncConfig);
+  const githubProjectSync = await syncGitHubProjectRepositories(syncConfig);
+  const githubSyncedPaths = new Set();
+  for (const item of githubProjectSync.results) {
+    if (item.targetPath) {
+      githubSyncedPaths.add(path.resolve(item.targetPath));
+    }
+    const label = item.repository || item.project || "project repo";
+    if (item.skipped) {
+      console.log(`[richie-sync] GitHub ${label} ${item.action} skipped: ${item.message}`);
+    } else if (item.ok) {
+      console.log(`[richie-sync] GitHub ${label} ${item.action} ok: ${item.message}`);
+    } else {
+      console.warn(`[richie-sync] GitHub ${label} ${item.action} failed: ${item.message}`);
+    }
+  }
+
+  const projectPulls = await pullSiblingProjects(syncConfig, githubSyncedPaths);
   for (const projectPull of projectPulls) {
     if (projectPull.skipped) {
       console.log(`[richie-sync] project ${projectPull.project} pull skipped: ${projectPull.message}`);
@@ -368,7 +706,7 @@ export async function runSyncOnce(syncConfig, reason = "manual") {
     console.warn(`[richie-sync] skipped skill ${item.name}: ${item.reason}`);
   }
 
-  return { pull, projectPulls, install };
+  return { pull, githubProjectSync, projectPulls, install };
 }
 
 export function startGitSync(syncConfig) {

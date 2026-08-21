@@ -1,15 +1,24 @@
 # richie Feishu dispatcher
 
-这是本机给飞书机器人 `richie` 跑的后台。它只负责飞书长连接、消息路由、本机 Codex CLI 执行、以及从同级业务项目里发现 skills。
+这是本机给飞书机器人 `richie` 跑的后台。它只负责飞书长连接、消息路由、本机 Codex CLI 执行、以及把 GitHub 上可读的项目 repo 同步到本机后加载 skills。
 
-`richie-feishu-dispatcher` 是 runner/基础设施仓库，不是业务项目。业务项目应该和它放在同一层级，可以是独立 GitHub 仓库，也可以是同级文件夹。
+重要：`richie-feishu-dispatcher` 是 runner 仓库，不是业务项目仓库。业务项目应该是和它同级的独立 GitHub repo，这样 GitHub 权限可以按 repo 分别开给不同的人。
 
-推荐本机布局：
+推荐结构：
+
+```text
+GitHub / Savannah-395
+  richie-feishu-dispatcher        # 本仓库，只运行后台
+  amazon-spc-wall-panel           # 一个业务项目 repo
+  supplier-pricing                # 另一个业务项目 repo
+```
+
+本机结构会被 richie 自动同步成：
 
 ```text
 workspace/
-  richie-feishu-dispatcher/       # 本仓库，只运行后台
-  amazon-spc-wall-panel/          # 业务项目仓库/文件夹
+  richie-feishu-dispatcher/
+  amazon-spc-wall-panel/
     PROJECT.md
     skills/
       research/
@@ -17,72 +26,78 @@ workspace/
         references/
         scripts/
         assets/
-  supplier-pricing/               # 另一个业务项目仓库/文件夹
+  supplier-pricing/
     PROJECT.md
     skills/
-      research/
+      quote-check/
         SKILL.md
 ```
 
-richie 会扫描 `RICHIE_PROJECT_ROOTS` 指定目录下的同级项目，跳过 `richie-feishu-dispatcher` 自己。每个项目的可调用 skill 是：
+richie 每 10 分钟会：
+
+1. `git pull --ff-only` 更新 `richie-feishu-dispatcher` 自己。
+2. 从 `RICHIE_GITHUB_PROJECT_OWNER` 下发现 richie 可读的项目 repo。
+3. 本机没有的项目 repo 自动 clone 到同级目录，已有的项目 repo 自动 pull。
+4. 扫描每个项目的 `skills/<skill-name>/SKILL.md`。
+5. 把 skill 安装到本机 Codex skills，命名为 `<project-name>--<skill-name>`。
+
+飞书里调用时使用：
 
 ```text
 <project-name>/<skill-name>
 ```
 
-安装到本机 Codex user skills 时会自动加项目作用域：
+这样不同项目都可以有 `research`、`report` 这类同名 skill，不会互相覆盖。如果只说 `research` 且多个项目都有，richie 应该先问你用哪个项目。
+
+## 项目 repo 规范
+
+每个业务项目 repo 至少放：
 
 ```text
-<project-name>--<skill-name>
+PROJECT.md
+skills/
+  your-skill-name/
+    SKILL.md
 ```
 
-这样不同项目都可以有 `research`、`report` 这类同名 skill，不会互相覆盖。飞书里调用时尽量说清项目，例如“用 `amazon-spc-wall-panel/research` 调研美国站 SPC 墙板”。如果只说 `research` 且多个项目都有，richie 应该先问你用哪个项目。
-
-## 目录
+可以从本仓库的模板复制：
 
 ```text
-src/
-  index.js            # 飞书长连接入口和消息路由
-  codex-runner.js     # 启动本机 Codex CLI
-  skill-sync.js       # git pull + 同级项目 skill 安装
-templates/
-  project/            # 新业务项目模板，复制到 dispatcher 同级目录使用
-scripts/
-  start-richie-background.ps1
-  sync-richie-skills.ps1
+templates/project/
 ```
+
+AmandaYYL 或其他协作者只需要被授予对应业务项目 repo 的写权限，然后从自己的电脑 push 到那个项目 repo。本机 richie 会通过同步任务自动拉取，不需要他们登录这台机器。
 
 ## 配置
 
-复制 `.env.example` 到 `.env` 并填写：
+复制 `.env.example` 到 `.env` 并填写密钥。当前推荐同步配置：
 
-- `FEISHU_APP_ID`
-- `FEISHU_APP_SECRET`
-- `OPENAI_API_KEY`
-- `OPENAI_BASE_URL`
-- `OPENAI_MODEL`
+```env
+RICHIE_GIT_SYNC_ENABLED=true
+RICHIE_GIT_SYNC_INTERVAL_SECONDS=600
+RICHIE_PROJECT_ROOTS=..
+RICHIE_GITHUB_PROJECT_OWNER=Savannah-395
+RICHIE_GITHUB_AUTO_DISCOVER_PROJECT_REPOS=true
+RICHIE_GITHUB_PROJECT_REPOS=
+RICHIE_GITHUB_PROJECT_CLONE_ROOT=..
+RICHIE_INSTALL_CODEX_SKILLS=true
+```
 
-回复策略默认是话题第一条消息必须 @ richie，后续同一话题内继续交互不用重复 @：
+如果不想自动发现所有可读 repo，可以关闭自动发现，并显式列项目：
+
+```env
+RICHIE_GITHUB_AUTO_DISCOVER_PROJECT_REPOS=false
+RICHIE_GITHUB_PROJECT_REPOS=Savannah-395/project-a,Savannah-395/project-b
+```
+
+私有 repo 的发现优先使用 `GITHUB_TOKEN` / `GH_TOKEN`；如果没有环境变量，会尝试读取本机 Git Credential Manager 里已有的 GitHub 凭据。clone 和 pull 不会把 token 写进仓库。
+
+回复策略默认是话题第一条消息必须 @ richie，后续同一话题内继续交互不需要重复 @：
 
 ```env
 BOT_REQUIRE_MENTION_TO_START=true
 BOT_REQUIRE_MENTION_TO_REPLY=false
 ```
-
-同级项目扫描配置：
-
-```env
-RICHIE_GIT_SYNC_ENABLED=true
-RICHIE_GIT_SYNC_INTERVAL_SECONDS=600
-RICHIE_GIT_REMOTE=origin
-RICHIE_GIT_BRANCH=
-RICHIE_PROJECT_ROOTS=..
-RICHIE_INSTALL_CODEX_SKILLS=true
-RICHIE_CODEX_SKILLS_DIR=
-RICHIE_SKILL_PREFIX=
-```
-
-`RICHIE_PROJECT_ROOTS=..` 表示扫描 dispatcher 父目录下的同级项目。多个根目录可用英文逗号分隔。richie 会对已存在且本身是 git repo 的同级项目执行 `git pull --ff-only`，但不会自动 clone 尚未在本机存在的新仓库。
 
 ## 启动
 
@@ -98,27 +113,11 @@ npm run start
 powershell -ExecutionPolicy Bypass -File scripts\start-richie-background.ps1
 ```
 
-重启已存在的 `src\index.js` bot 进程：
+重启已存在的 bot 进程：
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\start-richie-background.ps1 -Restart
 ```
-
-## 同级业务项目工作流
-
-创建新业务项目时，把模板复制到和 dispatcher 同级的位置：
-
-```text
-workspace/
-  richie-feishu-dispatcher/
-  your-project-name/
-    PROJECT.md
-    skills/
-      your-skill-name/
-        SKILL.md
-```
-
-如果 AmandaYYL 在其他电脑维护项目 repo，他只需要推业务项目仓库；本机这里需要先把该项目 clone 到 dispatcher 同级目录一次。之后 richie 每 10 分钟会自动 pull 已 clone 的同级项目。
 
 手动同步一次：
 
@@ -126,7 +125,7 @@ workspace/
 npm run sync:once
 ```
 
-飞书里查看当前本机已发现的同级项目 skill：
+飞书里查看当前已发现 skill：
 
 ```text
 /skills
@@ -138,7 +137,9 @@ npm run sync:once
 技能列表
 ```
 
-## 飞书后台需要打开
+## 飞书后台
+
+需要开启：
 
 - 应用能力：机器人
 - 事件订阅：长连接

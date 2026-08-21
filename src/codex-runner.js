@@ -41,11 +41,16 @@ function formatSkillLine(skill) {
 async function buildSkillInstructions(config) {
   const { projectRoots, skills } = await listRepositorySkills({
     projectRoots: config.projectRoots,
+    githubProjectOwner: config.githubProjectOwner,
+    githubAutoDiscoverProjectRepos: config.githubAutoDiscoverProjectRepos,
+    githubProjectRepos: config.githubProjectRepos,
+    githubProjectCloneRoot: config.githubProjectCloneRoot,
   });
   const lines = [
-    "Richie Git-synced sibling project skills:",
-    `- Sibling project root directories: ${projectRoots.join(", ")}`,
-    "- richie-feishu-dispatcher is the runner repository and is not itself a business project.",
+    "Richie GitHub project skills:",
+    `- Local sibling project root directories: ${projectRoots.join(", ")}`,
+    "- richie-feishu-dispatcher is only the Feishu runner. Business projects live in separate GitHub repositories and are cloned beside it locally.",
+    "- GitHub repository permissions are project boundaries. Do not assume a skill from one project can be used for another project unless the user asks for that project.",
   ];
 
   if (config.codexSkillsDir) {

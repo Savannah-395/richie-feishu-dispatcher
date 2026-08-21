@@ -68,9 +68,10 @@ function shouldUseCodex(content) {
 }
 
 function isSkillListCommand(content) {
-  const normalized = (content || "").trim().toLowerCase();
+  const trimmed = (content || "").trim();
+  const normalized = trimmed.toLowerCase();
   return ["/skill", "/skills", "/skill list", "/skills list"].includes(normalized)
-    || /^(技能列表|列出技能|查看技能|有哪些技能)$/.test((content || "").trim());
+    || /^(技能列表|列出技能|查看技能|有哪些技能)$/.test(trimmed);
 }
 
 function getMatchedPrefix(content, prefixes) {
@@ -155,7 +156,7 @@ async function markMessageDone(message, ackReactionId) {
     await channel.addReaction(message.messageId, config.bot.doneEmojiType);
     console.log(`Added ${config.bot.doneEmojiType} reaction to ${message.messageId}`);
   } catch (error) {
-    console.warn(`Failed to add ${config.bot.doneEmojiType} reaction to ${message.messageId}`, error);
+    console.warn(`Failed to add ${config.bot.doneEmojiType} reaction`, error);
   }
 }
 
@@ -183,12 +184,16 @@ async function sendCodexResult(message, result) {
 
 async function sendSkillList(message) {
   const { projectRoots, skills } = await listRepositorySkills(config.sync);
+  const owner = config.sync.githubProjectOwner || "origin 所属账号/组织";
   const lines = [
-    `richie 当前同级项目根目录：${projectRoots.join(", ")}`,
+    `richie 当前本机同级项目根目录：${projectRoots.join(", ")}`,
+    config.sync.githubAutoDiscoverProjectRepos
+      ? `GitHub 自动发现：${owner} 下 richie 可读的项目 repo 会自动同步到同级目录。`
+      : "GitHub 自动发现未开启；当前只扫描本机已存在的同级项目目录。",
     "`richie-feishu-dispatcher` 只是后台 runner，不作为业务项目扫描。",
     "",
     skills.length === 0
-      ? "当前还没有可用 skill。把项目 clone 到同级目录，并放置 `<项目名>/skills/<skill名>/SKILL.md` 后，richie 会在下一次同步时加载。"
+      ? "当前还没有可用 skill。项目 repo 需要包含 `PROJECT.md` 或 `skills/<skill>/SKILL.md`；richie 会在同步后加载。"
       : "当前可用 project/skill：",
   ];
 
@@ -262,120 +267,120 @@ async function handleMessage(message) {
     }
 
     await queue.run(topicId, async () => {
-    store.activate(topicId);
-    const attachmentResult = await downloadMessageAttachments(channel, message, topicId);
-    const attachmentSummary = formatAttachmentSummary(attachmentResult);
-    const hasCurrentAttachments = attachmentResult.attachments.length > 0;
-    const hasTopicAttachments = hasCurrentAttachments || store.hasAttachments(topicId);
+      store.activate(topicId);
+      const attachmentResult = await downloadMessageAttachments(channel, message, topicId);
+      const attachmentSummary = formatAttachmentSummary(attachmentResult);
+      const hasCurrentAttachments = attachmentResult.attachments.length > 0;
+      const hasTopicAttachments = hasCurrentAttachments || store.hasAttachments(topicId);
 
-    const messageContent = message.content || "";
-    const fullAccessPrefix = config.codex.enabled
-      ? getMatchedPrefix(messageContent, config.codex.fullAccessPrefixes)
-      : "";
-    const forcedCodex = config.codex.enabled && isCodexCommand(messageContent, config.codex.prefix);
-    const routedCodex = config.codex.enabled && (
-      fullAccessPrefix ||
-      forcedCodex ||
-      shouldUseCodex(messageContent) ||
-      hasCurrentAttachments ||
-      (hasTopicAttachments && shouldUseAttachmentContext(messageContent))
-    );
-
-    const userEntry = {
-      role: "user",
-      author: getAuthorName(message),
-      content: [messageContent.trim(), attachmentSummary].filter(Boolean).join("\n\n"),
-      attachments: attachmentResult.attachments,
-    };
-
-    store.append(topicId, userEntry);
-    const threadTranscript = store.toModelInput(topicId);
-
-    if (routedCodex) {
-      if (fullAccessPrefix && !canUseFullAccess(message)) {
-        await channel.send(
-          message.chatId,
-          { text: `当前发送者未被允许使用全电脑模式。senderId: ${message.senderId}` },
-          {
-            replyTo: message.messageId,
-            replyInThread: true,
-          },
-        );
-        await markComplete();
-        return;
-      }
-
-      const codexPrompt = fullAccessPrefix
-        ? extractCodexPrompt(messageContent, fullAccessPrefix)
-        : forcedCodex
-        ? extractCodexPrompt(messageContent, config.codex.prefix)
-        : messageContent.trim();
-      if (!codexPrompt && !hasCurrentAttachments) {
-        const expectedPrefix = fullAccessPrefix || config.codex.prefix;
-        await channel.send(
-          message.chatId,
-          { text: `请在 ${expectedPrefix} 后面写清楚要 Codex 执行的任务。` },
-          {
-            replyTo: message.messageId,
-            replyInThread: true,
-          },
-        );
-        await markComplete();
-        return;
-      }
-
-      const codexOptions = fullAccessPrefix
-        ? {
-            sandbox: config.codex.fullAccessSandbox,
-            workingRoot: config.codex.fullAccessRoot,
-            attachments: attachmentResult.attachments,
-          }
-        : {
-            attachments: attachmentResult.attachments,
-          };
-      console.log(
-        `Running ${fullAccessPrefix ? "full-access" : forcedCodex ? "forced" : "auto-routed"} Codex task for message ${message.messageId} in topic ${topicId}`,
+      const messageContent = message.content || "";
+      const fullAccessPrefix = config.codex.enabled
+        ? getMatchedPrefix(messageContent, config.codex.fullAccessPrefixes)
+        : "";
+      const forcedCodex = config.codex.enabled && isCodexCommand(messageContent, config.codex.prefix);
+      const routedCodex = config.codex.enabled && (
+        fullAccessPrefix ||
+        forcedCodex ||
+        shouldUseCodex(messageContent) ||
+        hasCurrentAttachments ||
+        (hasTopicAttachments && shouldUseAttachmentContext(messageContent))
       );
-      const result = await runCodexTask(config.codex, buildCodexPrompt({
-        latestMessage: codexPrompt || userEntry.content,
+
+      const userEntry = {
+        role: "user",
+        author: getAuthorName(message),
+        content: [messageContent.trim(), attachmentSummary].filter(Boolean).join("\n\n"),
+        attachments: attachmentResult.attachments,
+      };
+
+      store.append(topicId, userEntry);
+      const threadTranscript = store.toModelInput(topicId);
+
+      if (routedCodex) {
+        if (fullAccessPrefix && !canUseFullAccess(message)) {
+          await channel.send(
+            message.chatId,
+            { text: `当前发送者未被允许使用全电脑模式。senderId: ${message.senderId}` },
+            {
+              replyTo: message.messageId,
+              replyInThread: true,
+            },
+          );
+          await markComplete();
+          return;
+        }
+
+        const codexPrompt = fullAccessPrefix
+          ? extractCodexPrompt(messageContent, fullAccessPrefix)
+          : forcedCodex
+            ? extractCodexPrompt(messageContent, config.codex.prefix)
+            : messageContent.trim();
+        if (!codexPrompt && !hasCurrentAttachments) {
+          const expectedPrefix = fullAccessPrefix || config.codex.prefix;
+          await channel.send(
+            message.chatId,
+            { text: `请在 ${expectedPrefix} 后面写清楚要 Codex 执行的任务。` },
+            {
+              replyTo: message.messageId,
+              replyInThread: true,
+            },
+          );
+          await markComplete();
+          return;
+        }
+
+        const codexOptions = fullAccessPrefix
+          ? {
+              sandbox: config.codex.fullAccessSandbox,
+              workingRoot: config.codex.fullAccessRoot,
+              attachments: attachmentResult.attachments,
+            }
+          : {
+              attachments: attachmentResult.attachments,
+            };
+        console.log(
+          `Running ${fullAccessPrefix ? "full-access" : forcedCodex ? "forced" : "auto-routed"} Codex task for message ${message.messageId} in topic ${topicId}`,
+        );
+        const result = await runCodexTask(config.codex, buildCodexPrompt({
+          latestMessage: codexPrompt || userEntry.content,
+          threadTranscript,
+        }), codexOptions);
+        await sendCodexResult(message, result);
+        console.log(`Sent Codex task ${result.taskId} result for message ${message.messageId}`);
+        await markComplete();
+        store.append(topicId, {
+          role: "assistant",
+          author: "bot",
+          content: result.finalMessage,
+        });
+        return;
+      }
+
+      console.log(`Generating reply for message ${message.messageId} in topic ${topicId}`);
+      const reply = await generateThreadReply(openai, config.openai, {
+        topicId,
+        senderName: userEntry.author,
+        latestMessage: userEntry.content,
         threadTranscript,
-      }), codexOptions);
-      await sendCodexResult(message, result);
-      console.log(`Sent Codex task ${result.taskId} result for message ${message.messageId}`);
+      });
+
+      await channel.send(
+        message.chatId,
+        { markdown: reply },
+        {
+          replyTo: message.messageId,
+          replyInThread: true,
+        },
+      );
+
+      console.log(`Sent reply for message ${message.messageId} in topic ${topicId}`);
       await markComplete();
+
       store.append(topicId, {
         role: "assistant",
         author: "bot",
-        content: result.finalMessage,
+        content: reply,
       });
-      return;
-    }
-
-    console.log(`Generating reply for message ${message.messageId} in topic ${topicId}`);
-    const reply = await generateThreadReply(openai, config.openai, {
-      topicId,
-      senderName: userEntry.author,
-      latestMessage: userEntry.content,
-      threadTranscript,
-    });
-
-    await channel.send(
-      message.chatId,
-      { markdown: reply },
-      {
-        replyTo: message.messageId,
-        replyInThread: true,
-      },
-    );
-
-    console.log(`Sent reply for message ${message.messageId} in topic ${topicId}`);
-    await markComplete();
-
-    store.append(topicId, {
-      role: "assistant",
-      author: "bot",
-      content: reply,
-    });
     });
   } catch (error) {
     console.error("Failed to process message", error);
