@@ -182,17 +182,18 @@ async function sendCodexResult(message, result) {
 }
 
 async function sendSkillList(message) {
-  const { skillsRoot, skills } = await listRepositorySkills(config.sync);
+  const { projectsRoot, legacySkillsRoot, skills } = await listRepositorySkills(config.sync);
   const lines = [
-    `richie 当前同步目录：${skillsRoot}`,
+    `richie 当前项目目录：${projectsRoot}`,
+    `兼容旧 skill 目录：${legacySkillsRoot}`,
     "",
     skills.length === 0
-      ? "当前还没有可用 skill。把包含 `SKILL.md` 的目录推到 `skills/` 后，richie 会在下一次同步时加载。"
-      : "当前可用 skill：",
+      ? "当前还没有可用 skill。把项目推到 `projects/<项目名>/skills/<skill名>/SKILL.md` 后，richie 会在下一次同步时加载。"
+      : "当前可用 project/skill：",
   ];
 
   for (const skill of skills) {
-    const label = skill.title && skill.title !== skill.name ? `${skill.name}（${skill.title}）` : skill.name;
+    const label = skill.title && skill.title !== skill.name ? `${skill.key}（${skill.title}）` : skill.key;
     lines.push(skill.description ? `- ${label}: ${skill.description}` : `- ${label}`);
   }
 

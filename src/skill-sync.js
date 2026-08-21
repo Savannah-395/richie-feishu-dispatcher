@@ -87,9 +87,18 @@ function summarizeSkill(skillMd) {
   return { title, description };
 }
 
-export async function listRepositorySkills(syncConfig) {
-  const skillsRoot = resolveLocalPath(syncConfig.skillsDir);
-  await mkdir(skillsRoot, { recursive: true });
+async function summarizeMarkdownFile(filePath) {
+  try {
+    return summarizeSkill(await readFile(filePath, "utf8"));
+  } catch {
+    return { title: "", description: "" };
+  }
+}
+
+async function scanSkillDirectory({ skillsRoot, projectName, projectPath, projectTitle, legacy = false }) {
+  if (!(await pathExists(skillsRoot))) {
+    return [];
+  }
 
   const entries = await readdir(skillsRoot, { withFileTypes: true });
   const skills = [];
@@ -105,25 +114,59 @@ export async function listRepositorySkills(syncConfig) {
       continue;
     }
 
-    let title = "";
-    let description = "";
-    try {
-      ({ title, description } = summarizeSkill(await readFile(skillMdPath, "utf8")));
-    } catch {
-      title = "";
-      description = "";
-    }
+    const { title, description } = await summarizeMarkdownFile(skillMdPath);
 
     skills.push({
       name: entry.name,
+      projectName,
+      projectTitle,
+      key: `${projectName}/${entry.name}`,
       title,
       description,
       path: skillPath,
       skillMdPath,
+      projectPath,
+      legacy,
     });
   }
 
-  return { skillsRoot, skills };
+  return skills;
+}
+
+export async function listRepositorySkills(syncConfig) {
+  const projectsRoot = resolveLocalPath(syncConfig.projectsDir || "projects");
+  const legacySkillsRoot = resolveLocalPath(syncConfig.skillsDir || "skills");
+  await mkdir(projectsRoot, { recursive: true });
+  await mkdir(legacySkillsRoot, { recursive: true });
+
+  const skills = [];
+  const projectEntries = await readdir(projectsRoot, { withFileTypes: true });
+
+  for (const projectEntry of projectEntries) {
+    if (!projectEntry.isDirectory() || projectEntry.name.startsWith(".") || projectEntry.name.startsWith("_")) {
+      continue;
+    }
+
+    const projectPath = path.join(projectsRoot, projectEntry.name);
+    const projectMdPath = path.join(projectPath, "PROJECT.md");
+    const projectSummary = await summarizeMarkdownFile(projectMdPath);
+    skills.push(...await scanSkillDirectory({
+      skillsRoot: path.join(projectPath, "skills"),
+      projectName: projectEntry.name,
+      projectPath,
+      projectTitle: projectSummary.title || projectEntry.name,
+    }));
+  }
+
+  skills.push(...await scanSkillDirectory({
+    skillsRoot: legacySkillsRoot,
+    projectName: "legacy",
+    projectPath: legacySkillsRoot,
+    projectTitle: "legacy",
+    legacy: true,
+  }));
+
+  return { projectsRoot, legacySkillsRoot, skillsRoot: projectsRoot, skills };
 }
 
 async function pullLatest(syncConfig) {
@@ -158,7 +201,7 @@ async function installCodexSkills(syncConfig) {
   const targetRoot = resolveLocalPath(syncConfig.codexSkillsDir);
   await mkdir(targetRoot, { recursive: true });
 
-  const { skillsRoot, skills } = await listRepositorySkills(syncConfig);
+  const { projectsRoot, legacySkillsRoot, skills } = await listRepositorySkills(syncConfig);
   const manifestPath = path.join(targetRoot, managedManifestName);
   const previousManifest = await readJson(manifestPath, { managedTargets: [] });
   const previousTargets = new Set(Array.isArray(previousManifest.managedTargets) ? previousManifest.managedTargets : []);
@@ -168,9 +211,9 @@ async function installCodexSkills(syncConfig) {
   const removed = [];
 
   for (const skill of skills) {
-    const targetName = `${syncConfig.skillPrefix || ""}${skill.name}`;
+    const targetName = `${syncConfig.skillPrefix || ""}${skill.projectName}--${skill.name}`;
     if (!isValidSkillTargetName(targetName)) {
-      skipped.push({ name: skill.name, reason: `invalid target name '${targetName}'` });
+      skipped.push({ name: skill.key, reason: `invalid target name '${targetName}'` });
       continue;
     }
     targetNames.add(targetName);
@@ -191,7 +234,7 @@ async function installCodexSkills(syncConfig) {
   }
 
   for (const skill of skills) {
-    const targetName = `${syncConfig.skillPrefix || ""}${skill.name}`;
+    const targetName = `${syncConfig.skillPrefix || ""}${skill.projectName}--${skill.name}`;
     if (!targetNames.has(targetName)) {
       continue;
     }
@@ -203,7 +246,7 @@ async function installCodexSkills(syncConfig) {
     if (await pathExists(targetPath)) {
       if (!(await pathExists(markerPath)) && !previousTargets.has(targetName)) {
         skipped.push({
-          name: skill.name,
+          name: skill.key,
           reason: `${targetPath} already exists and is not managed by richie`,
         });
         continue;
@@ -214,13 +257,16 @@ async function installCodexSkills(syncConfig) {
     await cp(skill.path, targetPath, { recursive: true });
     await writeFile(markerPath, JSON.stringify({
       source: skill.path,
+      project: skill.projectName,
+      skill: skill.name,
       installedAt: new Date().toISOString(),
     }, null, 2), "utf8");
-    installed.push({ name: skill.name, targetName, targetPath });
+    installed.push({ name: skill.name, projectName: skill.projectName, key: skill.key, targetName, targetPath });
   }
 
   await writeFile(manifestPath, JSON.stringify({
-    sourceRoot: skillsRoot,
+    projectsRoot,
+    legacySkillsRoot,
     updatedAt: new Date().toISOString(),
     managedTargets: installed.map((item) => item.targetName),
   }, null, 2), "utf8");

@@ -31,15 +31,22 @@ function createTaskId() {
 }
 
 function formatSkillLine(skill) {
-  const label = skill.title && skill.title !== skill.name ? `${skill.name} (${skill.title})` : skill.name;
-  return skill.description ? `- ${label}: ${skill.description}` : `- ${label}`;
+  const label = skill.title && skill.title !== skill.name ? `${skill.key} (${skill.title})` : skill.key;
+  const projectLabel = skill.projectTitle && skill.projectTitle !== skill.projectName
+    ? ` [project: ${skill.projectTitle}]`
+    : "";
+  return skill.description ? `- ${label}${projectLabel}: ${skill.description}` : `- ${label}${projectLabel}`;
 }
 
 async function buildSkillInstructions(config) {
-  const { skillsRoot, skills } = await listRepositorySkills({ skillsDir: config.skillsDir || "skills" });
+  const { projectsRoot, legacySkillsRoot, skills } = await listRepositorySkills({
+    projectsDir: config.projectsDir || "projects",
+    skillsDir: config.skillsDir || "skills",
+  });
   const lines = [
-    "Richie Git-synced skills:",
-    `- Repository skills directory: ${skillsRoot}`,
+    "Richie Git-synced project skills:",
+    `- Repository projects directory: ${projectsRoot}`,
+    `- Legacy flat skills directory: ${legacySkillsRoot}`,
   ];
 
   if (config.codexSkillsDir) {
@@ -47,7 +54,9 @@ async function buildSkillInstructions(config) {
   }
 
   lines.push(
-    "- When the user names a skill or the task matches a skill, inspect the matching directory and read SKILL.md completely before acting.",
+    "- Skills are scoped by project as project/skill. Prefer an explicitly named project when choosing a skill.",
+    "- If a requested skill name exists in multiple projects or the project is unclear, ask which project to use before acting.",
+    "- When the user names a project/skill or the task matches a skill, inspect the matching directory and read SKILL.md completely before acting.",
     "- If SKILL.md references scripts, assets, or reference files, resolve them relative to that skill directory.",
   );
 

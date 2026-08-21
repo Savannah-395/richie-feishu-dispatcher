@@ -4,6 +4,7 @@ import path from "node:path";
 dotenv.config();
 
 const richieSkillsDir = (process.env.RICHIE_SKILLS_DIR || "skills").trim();
+const richieProjectsDir = (process.env.RICHIE_PROJECTS_DIR || "projects").trim();
 const defaultCodexSkillsDir = path.join(process.env.USERPROFILE || process.cwd(), ".codex", "skills");
 const requireMentionToStart = readBoolean("BOT_REQUIRE_MENTION_TO_START", true);
 
@@ -82,6 +83,7 @@ export const config = {
     sandbox: (process.env.BOT_CODEX_SANDBOX || "workspace-write").trim(),
     timeoutMs: readNumber("BOT_CODEX_TIMEOUT_SECONDS", 600) * 1000,
     skillsDir: richieSkillsDir,
+    projectsDir: richieProjectsDir,
     codexSkillsDir: (process.env.RICHIE_CODEX_SKILLS_DIR || defaultCodexSkillsDir).trim(),
   },
   sync: {
@@ -89,6 +91,7 @@ export const config = {
     intervalMs: readNumber("RICHIE_GIT_SYNC_INTERVAL_SECONDS", 600) * 1000,
     remote: (process.env.RICHIE_GIT_REMOTE || "origin").trim(),
     branch: process.env.RICHIE_GIT_BRANCH?.trim() || "",
+    projectsDir: richieProjectsDir,
     skillsDir: richieSkillsDir,
     installCodexSkills: readBoolean("RICHIE_INSTALL_CODEX_SKILLS", true),
     codexSkillsDir: (process.env.RICHIE_CODEX_SKILLS_DIR || defaultCodexSkillsDir).trim(),

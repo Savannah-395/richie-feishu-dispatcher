@@ -8,7 +8,7 @@
 - 每个飞书话题独立排队，避免同一话题并发串上下文
 - Codex 任务在本机执行，产物放进 `logs/codex-runs/<taskId>/artifacts`
 - 机器人始终以 `richie` 身份提示，不使用参考项目里的机器人身份
-- 仓库里的 `skills/` 每 10 分钟从 GitHub 拉取一次，并镜像到本机 Codex skills
+- 仓库里的 `projects/` 每 10 分钟从 GitHub 拉取一次，并按项目镜像到本机 Codex skills
 
 ## 目录
 
@@ -17,8 +17,11 @@ src/
   index.js            # 飞书长连接入口和消息路由
   codex-runner.js     # 启动本机 Codex CLI
   skill-sync.js       # git pull + skills 安装
+projects/
+  README.md           # 项目级目录约定
+  _template/          # 项目模板，不会被安装
 skills/
-  _template/          # skill 模板，不会被安装
+  README.md           # 旧平铺 skill 结构兼容入口
 scripts/
   start-richie-background.ps1
   sync-richie-skills.ps1
@@ -52,11 +55,14 @@ RICHIE_GIT_SYNC_ENABLED=true
 RICHIE_GIT_SYNC_INTERVAL_SECONDS=600
 RICHIE_GIT_REMOTE=origin
 RICHIE_GIT_BRANCH=
+RICHIE_PROJECTS_DIR=projects
 RICHIE_SKILLS_DIR=skills
 RICHIE_INSTALL_CODEX_SKILLS=true
 RICHIE_CODEX_SKILLS_DIR=
 RICHIE_SKILL_PREFIX=
 ```
+
+`RICHIE_PROJECTS_DIR` 是主目录。`RICHIE_SKILLS_DIR` 只保留给早期平铺 skill 的兼容结构。
 
 `RICHIE_CODEX_SKILLS_DIR` 留空时默认使用 `%USERPROFILE%\.codex\skills`。
 
@@ -80,28 +86,53 @@ powershell -ExecutionPolicy Bypass -File scripts\start-richie-background.ps1
 powershell -ExecutionPolicy Bypass -File scripts\start-richie-background.ps1 -Restart
 ```
 
-## GitHub skill 工作流
+## GitHub project / skill 工作流
 
-每个 skill 是 `skills/<skill-name>/SKILL.md`：
+仓库按项目分目录，一个项目一个文件夹：
 
 ```text
-skills/
-  product-research/
-    SKILL.md
-    references/
-    scripts/
-    assets/
+projects/
+  amazon-spc-wall-panel/
+    PROJECT.md
+    skills/
+      research/
+        SKILL.md
+        references/
+        scripts/
+        assets/
+      report/
+        SKILL.md
+  supplier-pricing/
+    PROJECT.md
+    skills/
+      research/
+        SKILL.md
 ```
+
+richie 会把项目 skill 安装成本机 Codex skill 名：
+
+```text
+<project-name>--<skill-name>
+```
+
+比如：
+
+```text
+amazon-spc-wall-panel/research -> amazon-spc-wall-panel--research
+supplier-pricing/research -> supplier-pricing--research
+```
+
+这样不同项目可以有同名 skill，不会互相覆盖。飞书里要调用时，尽量说清项目和 skill，例如“用 `amazon-spc-wall-panel/research` 调研美国站 SPC 墙板”。如果只说 `research` 且多个项目都有，richie 应该先问你用哪个项目。
 
 在其他电脑上新增或修改 skill 后：
 
 ```bash
-git add skills/product-research
-git commit -m "Update product research skill"
+git add projects/amazon-spc-wall-panel
+git commit -m "Update amazon SPC wall panel skills"
 git push
 ```
 
-本机 richie 后台会启动即同步一次，之后每 10 分钟执行一次 `git pull --ff-only`。同步后会把有效 skill 镜像到 Codex user skills 目录。
+本机 richie 后台会启动即同步一次，之后每 10 分钟执行一次 `git pull --ff-only`。同步后会扫描 `projects/<project>/skills/<skill>/SKILL.md`，并把有效 skill 镜像到 Codex user skills 目录。
 
 手动同步一次：
 
