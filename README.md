@@ -115,6 +115,15 @@ BOT_REQUIRE_MENTION_TO_START=true
 BOT_REQUIRE_MENTION_TO_REPLY=false
 ```
 
+Windows 上必须固定 Python/Codex 的 UTF-8 运行环境，否则飞书前台可能把中文渲染成问号：
+
+```env
+PYTHONUTF8=1
+PYTHONIOENCODING=utf-8
+```
+
+`scripts/start-richie-background.ps1` 会在启动前执行 `chcp 65001` 并设置上述环境变量。
+
 ## 启动
 
 ```powershell

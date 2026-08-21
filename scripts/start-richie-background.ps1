@@ -13,6 +13,18 @@ $Entry = Join-Path $ProjectRoot "src\index.js"
 
 New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
 
+try {
+  chcp.com 65001 | Out-Null
+} catch {
+  Write-Warning "Failed to set console code page to UTF-8: $($_.Exception.Message)"
+}
+
+$Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+[Console]::OutputEncoding = $Utf8NoBom
+$OutputEncoding = $Utf8NoBom
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
+
 if ($Restart) {
   Get-CimInstance Win32_Process -Filter "name = 'node.exe'" |
     Where-Object { $_.CommandLine -like "*$Entry*" } |

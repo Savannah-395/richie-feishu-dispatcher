@@ -241,6 +241,8 @@ export async function runCodexTask(config, userPrompt, options = {}) {
       stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...process.env,
+        PYTHONUTF8: "1",
+        PYTHONIOENCODING: "utf-8",
         NO_COLOR: "1",
       },
     });
