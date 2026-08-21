@@ -9,6 +9,7 @@ const projectRoot = path.resolve(__dirname, "..");
 const managedMarkerName = ".richie-managed";
 const managedManifestName = ".richie-managed.json";
 const projectRepoManifestName = "richie-project-repos.json";
+const removeDirectoryOptions = { recursive: true, force: true, maxRetries: 5, retryDelay: 300 };
 
 function resolveLocalPath(value) {
   return path.isAbsolute(value) ? value : path.join(projectRoot, value);
@@ -241,6 +242,39 @@ function buildSkillRoute({ project, skill, chatIds, configPath, routeConfig = {}
     skillMdPath: skill?.skillMdPath || "",
     configPath,
   };
+}
+
+function shouldCopySkillFile(sourcePath, skillPath) {
+  const relativePath = path.relative(skillPath, sourcePath);
+  if (!relativePath) {
+    return true;
+  }
+
+  const parts = relativePath.split(path.sep).filter(Boolean);
+  const blockedNames = new Set([
+    ".git",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".richie-managed",
+    ".ruff_cache",
+    ".venv",
+    ".venv-browser",
+    "__pycache__",
+    "node_modules",
+    "runs",
+    "state",
+  ]);
+
+  if (parts.some((part) => blockedNames.has(part))) {
+    return false;
+  }
+
+  const name = parts[parts.length - 1] || "";
+  if (name === ".env" || (name.endsWith(".env") && !name.endsWith(".env.example"))) {
+    return false;
+  }
+
+  return !name.endsWith(".pyc") && !name.endsWith(".pyo");
 }
 
 function getProjectRoots(syncConfig) {
@@ -804,7 +838,7 @@ async function installCodexSkills(syncConfig) {
     assertInside(targetRoot, targetPath);
     const markerPath = path.join(targetPath, managedMarkerName);
     if (await pathExists(markerPath)) {
-      await rm(targetPath, { recursive: true, force: true });
+      await rm(targetPath, removeDirectoryOptions);
       removed.push(previousTarget);
     }
   }
@@ -827,10 +861,13 @@ async function installCodexSkills(syncConfig) {
         });
         continue;
       }
-      await rm(targetPath, { recursive: true, force: true });
+      await rm(targetPath, removeDirectoryOptions);
     }
 
-    await cp(skill.path, targetPath, { recursive: true });
+    await cp(skill.path, targetPath, {
+      recursive: true,
+      filter: (sourcePath) => shouldCopySkillFile(sourcePath, skill.path),
+    });
     await writeFile(markerPath, JSON.stringify({
       source: skill.path,
       project: skill.projectName,
