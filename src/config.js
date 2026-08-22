@@ -85,7 +85,7 @@ export const config = {
     fullAccessSandbox: (process.env.BOT_CODEX_FULL_ACCESS_SANDBOX || "danger-full-access").trim(),
     model: process.env.BOT_CODEX_MODEL?.trim() || "",
     sandbox: (process.env.BOT_CODEX_SANDBOX || "workspace-write").trim(),
-    timeoutMs: readNumber("BOT_CODEX_TIMEOUT_SECONDS", 600) * 1000,
+    timeoutMs: readNumber("BOT_CODEX_TIMEOUT_SECONDS", 1000) * 1000,
     projectRoots: richieProjectRoots,
     githubProjectOwner: process.env.RICHIE_GITHUB_PROJECT_OWNER?.trim() || "",
     githubAutoDiscoverProjectRepos: readBoolean("RICHIE_GITHUB_AUTO_DISCOVER_PROJECT_REPOS", false),
