@@ -1,0 +1,392 @@
+{
+  "schema_version": "1.0.0",
+  "researched_at": "2026-08-24",
+  "scope": {
+    "regions": ["europe", "us"],
+    "purpose": "Research how product information can be acquired from the storefronts shown in the supplied channel list.",
+    "exclusions": [
+      "No scraper, API client, credential flow, or scheduled collection is implemented.",
+      "A robots.txt response is not treated as permission to collect or reuse product data.",
+      "The registry does not promise that every normalized field is available from every channel."
+    ]
+  },
+  "normalized_product_fields": [
+    "title",
+    "brand",
+    "description",
+    "dimensions",
+    "weight",
+    "specifications",
+    "materials",
+    "color",
+    "price",
+    "currency",
+    "availability",
+    "seller",
+    "manufacturer",
+    "source_url",
+    "source_site",
+    "source_country",
+    "sku",
+    "mpn",
+    "gtin",
+    "images",
+    "documents",
+    "variants",
+    "category",
+    "ratings",
+    "raw_attributes",
+    "collected_at"
+  ],
+  "access_methods": {
+    "affiliate_catalog_api": "Read-oriented catalog API, subject to affiliate approval, credentials, usage policy, and locale coverage.",
+    "developer_catalog_api": "Read-oriented developer API, subject to application registration, OAuth or API credentials, and platform terms.",
+    "seller_partner_api": "API intended for sellers, suppliers, or approved solution partners; it is not a general public catalog export.",
+    "partner_feed": "Approved partner or dropshipping feed, normally requiring a commercial relationship.",
+    "compliant_web_assessment": "No suitable public catalog API was identified in this review. Any page collection requires separate terms, robots, rate-limit, copyright, privacy, and data-reuse review."
+  },
+  "platforms": [
+    {
+      "id": "amazon",
+      "name": "Amazon",
+      "access_method": "affiliate_catalog_api",
+      "api_status": "conditional_catalog_api",
+      "access_requirements": "Amazon Associates enrollment for each target marketplace, qualifying sales, API registration, and credentials.",
+      "catalog_scope": ["keyword search", "item details", "variations", "browse nodes", "product images and rich content when licensed"],
+      "limitations": ["Not an unrestricted bulk catalog export.", "Creators API policy and locale-specific license terms govern storage and display.", "Selling Partner API is seller-scoped and is not the default research path."],
+      "evidence": [
+        {
+          "url": "https://affiliate-program.amazon.com/creatorsapi/docs/en-us/introduction",
+          "kind": "official_documentation",
+          "verification": "verified_2026-08-24",
+          "note": "Official page states that Creators API provides Amazon product catalog access and lists prerequisites."
+        }
+      ]
+    },
+    {
+      "id": "otto",
+      "name": "OTTO",
+      "access_method": "seller_partner_api",
+      "api_status": "restricted_partner_api",
+      "access_requirements": "OTTO Market seller account or approved service-partner integration.",
+      "catalog_scope": ["seller products", "inventory", "orders and other marketplace business objects"],
+      "limitations": ["Designed for sellers and service partners, not independent public catalog research."],
+      "evidence": [{"url": "https://api.otto.market/docs/getting-started/", "kind": "official_documentation", "verification": "verified_2026-08-24", "note": "Documentation identifies Sellers and Service Partners as API consumers."}]
+    },
+    {
+      "id": "manomano",
+      "name": "ManoMano",
+      "access_method": "seller_partner_api",
+      "api_status": "restricted_partner_api",
+      "access_requirements": "Seller or approved partner access to ManoMano integration services.",
+      "catalog_scope": ["partner product and offer integration"],
+      "limitations": ["No unrestricted buyer-side catalog API was verified in this review."],
+      "evidence": [{"url": "https://developer.manomano.com/", "kind": "official_developer_portal", "verification": "official_url_not_retrieved", "note": "Confirm current onboarding and read permissions with ManoMano before implementation."}]
+    },
+    {
+      "id": "wayfair",
+      "name": "Wayfair",
+      "access_method": "seller_partner_api",
+      "api_status": "restricted_partner_api",
+      "access_requirements": "Wayfair Partner Home account and supplier/partner relationship.",
+      "catalog_scope": ["supplier catalog and operational integration"],
+      "limitations": ["Partner Home requires sign-in; no public shopper catalog API was identified."],
+      "evidence": [{"url": "https://partners.wayfair.com/", "kind": "official_partner_portal", "verification": "verified_2026-08-24", "note": "Official Partner Home redirected to authenticated sign-in."}]
+    },
+    {
+      "id": "zalando",
+      "name": "Zalando",
+      "access_method": "seller_partner_api",
+      "api_status": "restricted_partner_api",
+      "access_requirements": "Approved Zalando partner program access.",
+      "catalog_scope": ["partner articles, offers, and program operations"],
+      "limitations": ["Primarily fashion-focused and low relevance for SPC wall panels.", "No general public catalog export was identified."],
+      "evidence": [{"url": "https://docs.partner-solutions.zalan.do/", "kind": "official_documentation", "verification": "official_url_access_denied", "note": "Official partner documentation exists; automated verification returned access denied."}]
+    },
+    {
+      "id": "bol",
+      "name": "bol",
+      "access_method": "seller_partner_api",
+      "api_status": "restricted_partner_api",
+      "access_requirements": "bol retailer account and OAuth credentials.",
+      "catalog_scope": ["retailer offers", "orders", "catalog-related seller workflows"],
+      "limitations": ["Retailer API is seller-scoped; validate whether catalog endpoints expose products not owned by the account."],
+      "evidence": [{"url": "https://api.bol.com/retailer/public/Retailer-API/introduction.html", "kind": "official_documentation", "verification": "official_url_timed_out", "note": "Official Retailer API URL could not be retrieved from the current network."}]
+    },
+    {
+      "id": "cdiscount",
+      "name": "Cdiscount",
+      "access_method": "seller_partner_api",
+      "api_status": "restricted_partner_api",
+      "access_requirements": "Cdiscount/Octopia marketplace seller or partner access.",
+      "catalog_scope": ["seller products", "offers", "orders"],
+      "limitations": ["Marketplace API is not an unrestricted shopper catalog API."],
+      "evidence": [{"url": "https://dev.cdiscount.com/marketplace/", "kind": "official_developer_portal", "verification": "official_url_service_unavailable", "note": "Official marketplace developer page returned HTTP 503 during review."}]
+    },
+    {
+      "id": "conforama",
+      "name": "Conforama",
+      "access_method": "compliant_web_assessment",
+      "api_status": "no_public_catalog_api_identified",
+      "access_requirements": "Obtain written partner access or complete a site-specific collection review.",
+      "catalog_scope": ["public product detail pages after compliance approval"],
+      "limitations": ["No suitable official public catalog API was identified in this limited review."],
+      "evidence": [{"url": "https://www.conforama.fr/", "kind": "official_storefront", "verification": "storefront_reference_only", "note": "Absence of a verified API is not proof that a private partner API does not exist."}]
+    },
+    {
+      "id": "emag",
+      "name": "eMAG",
+      "access_method": "seller_partner_api",
+      "api_status": "restricted_partner_api",
+      "access_requirements": "eMAG Marketplace seller credentials.",
+      "catalog_scope": ["seller product, offer, order, and marketplace operations"],
+      "limitations": ["Seller-scoped; not a public catalog research interface."],
+      "evidence": [{"url": "https://marketplace.emag.ro/infocenter/emag-academy/api/", "kind": "official_marketplace_resource", "verification": "verified_2026-08-24", "note": "Official marketplace API resource was reachable, but detailed access scope requires seller onboarding."}]
+    },
+    {
+      "id": "vidaxl",
+      "name": "vidaXL",
+      "access_method": "partner_feed",
+      "api_status": "restricted_partner_feed",
+      "access_requirements": "vidaXL B2B/dropshipping relationship and approved feed or API access.",
+      "catalog_scope": ["partner product content", "stock", "pricing", "orders where included by agreement"],
+      "limitations": ["Commercial partner feed, not a public site-wide export."],
+      "evidence": [{"url": "https://www.vidaxl.com/dropshipping.html", "kind": "official_partner_page", "verification": "official_url_auth_required", "note": "Official page returned HTTP 401 during review; confirm feed/API terms with vidaXL B2B."}]
+    },
+    {
+      "id": "westwing",
+      "name": "Westwing",
+      "access_method": "compliant_web_assessment",
+      "api_status": "no_public_catalog_api_identified",
+      "access_requirements": "Obtain partner permission or complete a site-specific collection review.",
+      "catalog_scope": ["public product detail pages after compliance approval"],
+      "limitations": ["WestwingNow branding may redirect to Westwing; canonical URLs must be resolved during implementation."],
+      "evidence": [{"url": "https://www.westwing.de/", "kind": "official_storefront", "verification": "storefront_reference_only", "note": "No public catalog API was verified."}]
+    },
+    {
+      "id": "leroy-merlin",
+      "name": "Leroy Merlin",
+      "access_method": "seller_partner_api",
+      "api_status": "restricted_partner_api",
+      "access_requirements": "Marketplace seller/partner approval; verify the operator-specific integration contract.",
+      "catalog_scope": ["marketplace seller product and offer integration"],
+      "limitations": ["No unrestricted buyer-side product API was verified."],
+      "evidence": [{"url": "https://www.leroymerlin.fr/marketplace/", "kind": "official_marketplace_page", "verification": "official_url_not_retrieved", "note": "Confirm current marketplace technology and credentials before implementation."}]
+    },
+    {
+      "id": "bricozor",
+      "name": "Bricozor",
+      "access_method": "compliant_web_assessment",
+      "api_status": "no_public_catalog_api_identified",
+      "access_requirements": "Site-specific legal and technical collection review.",
+      "catalog_scope": ["public product detail pages after compliance approval"],
+      "limitations": ["No public catalog API was identified."],
+      "evidence": [{"url": "https://www.bricozor.com/", "kind": "official_storefront", "verification": "storefront_reference_only", "note": "Recheck for commercial feeds before building a collector."}]
+    },
+    {
+      "id": "bricomarche",
+      "name": "Bricomarche",
+      "access_method": "compliant_web_assessment",
+      "api_status": "no_public_catalog_api_identified",
+      "access_requirements": "Site-specific legal and technical collection review.",
+      "catalog_scope": ["public product detail pages after compliance approval"],
+      "limitations": ["No public catalog API was identified."],
+      "evidence": [{"url": "https://www.bricomarche.com/", "kind": "official_storefront", "verification": "storefront_reference_only", "note": "Recheck for marketplace partner access before crawling."}]
+    },
+    {
+      "id": "reuter",
+      "name": "Reuter",
+      "access_method": "compliant_web_assessment",
+      "api_status": "no_public_catalog_api_identified",
+      "access_requirements": "Site-specific legal and technical collection review.",
+      "catalog_scope": ["public product detail pages after compliance approval"],
+      "limitations": ["No public catalog API was identified."],
+      "evidence": [{"url": "https://www.reuter.de/", "kind": "official_storefront", "verification": "storefront_reference_only", "note": "Recheck for trade feeds before implementation."}]
+    },
+    {
+      "id": "kaufland",
+      "name": "Kaufland",
+      "access_method": "seller_partner_api",
+      "api_status": "restricted_partner_api",
+      "access_requirements": "Kaufland marketplace seller or technology-partner account.",
+      "catalog_scope": ["seller product data", "inventory", "prices", "orders", "reports"],
+      "limitations": ["Official documentation describes seller inventory and sales management, not unrestricted public catalog research."],
+      "evidence": [{"url": "https://sellerapi.kaufland.com/", "kind": "official_documentation", "verification": "verified_2026-08-24", "note": "Official Seller API documentation describes seller and technology-partner use."}]
+    },
+    {
+      "id": "walmart",
+      "name": "Walmart",
+      "access_method": "seller_partner_api",
+      "api_status": "restricted_partner_api",
+      "access_requirements": "Approved Marketplace seller, solution provider, 1P supplier, carrier, or advertising partner credentials.",
+      "catalog_scope": ["partner items", "prices", "inventory", "orders"],
+      "limitations": ["The official portal presents APIs by business relationship; no anonymous full-catalog API is offered there."],
+      "evidence": [{"url": "https://developer.walmart.com/", "kind": "official_developer_portal", "verification": "verified_2026-08-24", "note": "Official portal lists Marketplace and 1P Supplier APIs and their partner audiences."}]
+    },
+    {
+      "id": "ebay",
+      "name": "eBay",
+      "access_method": "developer_catalog_api",
+      "api_status": "conditional_catalog_api",
+      "access_requirements": "eBay developer account, application keys, OAuth token, marketplace headers, and Buy API eligibility.",
+      "catalog_scope": ["item search", "item details", "aspects", "images", "seller and shipping data exposed by Browse API"],
+      "limitations": ["Field availability and production access are governed by Buy API policies and marketplace support."],
+      "evidence": [{"url": "https://developer.ebay.com/api-docs/buy/browse/overview.html", "kind": "official_documentation", "verification": "official_url_access_denied", "note": "Official Browse API URL returned HTTP 403 to the research client; verify interactively during onboarding."}]
+    },
+    {
+      "id": "overstock",
+      "name": "Overstock",
+      "access_method": "compliant_web_assessment",
+      "api_status": "no_public_catalog_api_identified",
+      "access_requirements": "Confirm current Beyond/Overstock partner options or complete a site-specific collection review.",
+      "catalog_scope": ["public product detail pages after compliance approval"],
+      "limitations": ["Brand and domain ownership have changed; resolve the current canonical storefront before implementation."],
+      "evidence": [{"url": "https://www.overstock.com/", "kind": "official_storefront", "verification": "storefront_reference_only", "note": "No public catalog API was verified."}]
+    },
+    {
+      "id": "home-depot",
+      "name": "The Home Depot",
+      "access_method": "compliant_web_assessment",
+      "api_status": "no_public_catalog_api_identified",
+      "access_requirements": "Seek supplier/affiliate permission or complete a site-specific collection review.",
+      "catalog_scope": ["public product detail pages after compliance approval"],
+      "limitations": ["No current public product-catalog API was identified in this review."],
+      "evidence": [{"url": "https://www.homedepot.com/", "kind": "official_storefront", "verification": "storefront_reference_only", "note": "Supplier systems should not be assumed to provide competitor-wide catalog access."}]
+    },
+    {
+      "id": "lowes",
+      "name": "Lowe's",
+      "access_method": "seller_partner_api",
+      "api_status": "restricted_partner_api",
+      "access_requirements": "Lowe's approved developer/partner access and credentials.",
+      "catalog_scope": ["APIs exposed to approved Lowe's business integrations"],
+      "limitations": ["Portal availability does not imply anonymous or full-catalog read access; endpoint scope must be confirmed after onboarding."],
+      "evidence": [{"url": "https://developer.lowes.com/portal", "kind": "official_developer_portal", "verification": "verified_2026-08-24", "note": "Official Lowe's Developer Hub was reachable."}]
+    },
+    {
+      "id": "target",
+      "name": "Target",
+      "access_method": "compliant_web_assessment",
+      "api_status": "no_public_catalog_api_identified",
+      "access_requirements": "Seek approved partner access or complete a site-specific collection review.",
+      "catalog_scope": ["public product detail pages after compliance approval"],
+      "limitations": ["No suitable official public product API was identified."],
+      "evidence": [{"url": "https://www.target.com/", "kind": "official_storefront", "verification": "storefront_reference_only", "note": "Private internal endpoints must not be treated as public APIs."}]
+    },
+    {
+      "id": "houzz",
+      "name": "Houzz",
+      "access_method": "compliant_web_assessment",
+      "api_status": "no_public_catalog_api_identified",
+      "access_requirements": "Confirm trade/partner data access or complete a site-specific collection review.",
+      "catalog_scope": ["public product detail pages after compliance approval"],
+      "limitations": ["No current public product-catalog API was verified."],
+      "evidence": [{"url": "https://www.houzz.com/", "kind": "official_storefront", "verification": "storefront_reference_only", "note": "Legacy API references should be revalidated before use."}]
+    },
+    {
+      "id": "etsy",
+      "name": "Etsy",
+      "access_method": "developer_catalog_api",
+      "api_status": "conditional_catalog_api",
+      "access_requirements": "Registered Etsy application, API key, OAuth where required, and compliance with Open API terms.",
+      "catalog_scope": ["active listings", "listing properties", "images", "shop data exposed by Open API"],
+      "limitations": ["Application review, rate limits, and permitted-use rules apply."],
+      "evidence": [{"url": "https://developers.etsy.com/documentation/", "kind": "official_documentation", "verification": "official_url_timed_out", "note": "Official Open API documentation timed out from the current network; verify during app registration."}]
+    },
+    {
+      "id": "bed-bath-beyond",
+      "name": "Bed Bath & Beyond",
+      "access_method": "compliant_web_assessment",
+      "api_status": "no_public_catalog_api_identified",
+      "access_requirements": "Confirm current Beyond partner access or complete a site-specific collection review.",
+      "catalog_scope": ["public product detail pages after compliance approval"],
+      "limitations": ["Corporate ownership and storefront behavior have changed; confirm canonical domains before implementation."],
+      "evidence": [{"url": "https://www.bedbathandbeyond.com/", "kind": "official_storefront", "verification": "storefront_reference_only", "note": "No public catalog API was verified."}]
+    },
+    {
+      "id": "newegg",
+      "name": "Newegg",
+      "access_method": "seller_partner_api",
+      "api_status": "restricted_partner_api",
+      "access_requirements": "Newegg Marketplace seller or approved developer credentials.",
+      "catalog_scope": ["seller items", "inventory", "pricing", "orders"],
+      "limitations": ["Marketplace API is seller-oriented and the channel has low relevance for SPC wall panels."],
+      "evidence": [{"url": "https://developer.newegg.com/", "kind": "official_developer_portal", "verification": "verified_2026-08-24", "note": "Official Newegg Developer Portal was reachable."}]
+    },
+    {
+      "id": "build",
+      "name": "Build.com",
+      "access_method": "compliant_web_assessment",
+      "api_status": "no_public_catalog_api_identified",
+      "access_requirements": "Seek Ferguson/Build commercial data access or complete a site-specific collection review.",
+      "catalog_scope": ["public product detail pages after compliance approval"],
+      "limitations": ["No public catalog API was verified."],
+      "evidence": [{"url": "https://www.build.com/", "kind": "official_storefront", "verification": "storefront_reference_only", "note": "Confirm parent-company partner options before crawling."}]
+    },
+    {
+      "id": "zoro",
+      "name": "Zoro",
+      "access_method": "compliant_web_assessment",
+      "api_status": "no_public_catalog_api_identified",
+      "access_requirements": "Seek commercial data access or complete a site-specific collection review.",
+      "catalog_scope": ["public product detail pages after compliance approval"],
+      "limitations": ["No public catalog API was verified."],
+      "evidence": [{"url": "https://www.zoro.com/", "kind": "official_storefront", "verification": "storefront_reference_only", "note": "Do not infer access from private browser endpoints."}]
+    },
+    {
+      "id": "grainger",
+      "name": "Grainger",
+      "access_method": "seller_partner_api",
+      "api_status": "restricted_partner_api",
+      "access_requirements": "Approved Grainger customer/partner developer access.",
+      "catalog_scope": ["business integration data exposed to approved accounts"],
+      "limitations": ["Endpoint scope and product-read permissions require commercial confirmation."],
+      "evidence": [{"url": "https://developer.grainger.com/", "kind": "official_developer_portal", "verification": "official_url_dns_failed", "note": "The documented developer hostname did not resolve from the current network; confirm with Grainger."}]
+    },
+    {
+      "id": "northern-tool",
+      "name": "Northern Tool",
+      "access_method": "compliant_web_assessment",
+      "api_status": "no_public_catalog_api_identified",
+      "access_requirements": "Seek supplier/affiliate access or complete a site-specific collection review.",
+      "catalog_scope": ["public product detail pages after compliance approval"],
+      "limitations": ["No public catalog API was verified."],
+      "evidence": [{"url": "https://www.northerntool.com/", "kind": "official_storefront", "verification": "storefront_reference_only", "note": "Recheck for commercial feeds before implementation."}]
+    }
+  ],
+  "channels": [
+    {"id": "amazon-de", "platform_id": "amazon", "display_name": "Amazon.de", "region": "europe", "country_codes": ["DE"], "domain": "amazon.de", "spc_wall_panel_relevance": "high"},
+    {"id": "otto-de", "platform_id": "otto", "display_name": "OTTO", "region": "europe", "country_codes": ["DE"], "domain": "otto.de", "spc_wall_panel_relevance": "medium"},
+    {"id": "manomano-eu", "platform_id": "manomano", "display_name": "ManoMano", "region": "europe", "country_codes": ["FR", "DE", "IT", "ES", "GB"], "domain": "manomano.com", "spc_wall_panel_relevance": "high"},
+    {"id": "wayfair-uk", "platform_id": "wayfair", "display_name": "Wayfair UK", "region": "europe", "country_codes": ["GB"], "domain": "wayfair.co.uk", "spc_wall_panel_relevance": "high"},
+    {"id": "zalando-eu", "platform_id": "zalando", "display_name": "Zalando", "region": "europe", "country_codes": ["EU"], "domain": "zalando.com", "spc_wall_panel_relevance": "low"},
+    {"id": "bol-nl", "platform_id": "bol", "display_name": "bol.com", "region": "europe", "country_codes": ["NL", "BE"], "domain": "bol.com", "spc_wall_panel_relevance": "medium"},
+    {"id": "cdiscount-fr", "platform_id": "cdiscount", "display_name": "Cdiscount", "region": "europe", "country_codes": ["FR"], "domain": "cdiscount.com", "spc_wall_panel_relevance": "high"},
+    {"id": "conforama-fr", "platform_id": "conforama", "display_name": "Conforama France", "region": "europe", "country_codes": ["FR"], "domain": "conforama.fr", "spc_wall_panel_relevance": "high"},
+    {"id": "emag-eu", "platform_id": "emag", "display_name": "eMAG", "region": "europe", "country_codes": ["RO", "BG", "HU"], "domain": "emag.ro", "spc_wall_panel_relevance": "medium"},
+    {"id": "vidaxl-eu", "platform_id": "vidaxl", "display_name": "vidaXL", "region": "europe", "country_codes": ["EU"], "domain": "vidaxl.com", "spc_wall_panel_relevance": "high"},
+    {"id": "westwing-eu", "platform_id": "westwing", "display_name": "Westwing", "region": "europe", "country_codes": ["EU"], "domain": "westwing.de", "spc_wall_panel_relevance": "medium"},
+    {"id": "amazon-it", "platform_id": "amazon", "display_name": "Amazon.it", "region": "europe", "country_codes": ["IT"], "domain": "amazon.it", "spc_wall_panel_relevance": "high"},
+    {"id": "leroy-merlin-fr", "platform_id": "leroy-merlin", "display_name": "Leroy Merlin France", "region": "europe", "country_codes": ["FR"], "domain": "leroymerlin.fr", "spc_wall_panel_relevance": "high"},
+    {"id": "bricozor-fr", "platform_id": "bricozor", "display_name": "Bricozor", "region": "europe", "country_codes": ["FR"], "domain": "bricozor.com", "spc_wall_panel_relevance": "high"},
+    {"id": "bricomarche-fr", "platform_id": "bricomarche", "display_name": "Bricomarche", "region": "europe", "country_codes": ["FR"], "domain": "bricomarche.com", "spc_wall_panel_relevance": "high"},
+    {"id": "reuter-de", "platform_id": "reuter", "display_name": "Reuter", "region": "europe", "country_codes": ["DE"], "domain": "reuter.de", "spc_wall_panel_relevance": "medium"},
+    {"id": "kaufland-de", "platform_id": "kaufland", "display_name": "Kaufland.de", "region": "europe", "country_codes": ["DE"], "domain": "kaufland.de", "spc_wall_panel_relevance": "medium"},
+    {"id": "amazon-us", "platform_id": "amazon", "display_name": "Amazon.com", "region": "us", "country_codes": ["US"], "domain": "amazon.com", "spc_wall_panel_relevance": "high"},
+    {"id": "wayfair-us", "platform_id": "wayfair", "display_name": "Wayfair US", "region": "us", "country_codes": ["US"], "domain": "wayfair.com", "spc_wall_panel_relevance": "high"},
+    {"id": "walmart-us", "platform_id": "walmart", "display_name": "Walmart", "region": "us", "country_codes": ["US"], "domain": "walmart.com", "spc_wall_panel_relevance": "high"},
+    {"id": "ebay-us", "platform_id": "ebay", "display_name": "eBay", "region": "us", "country_codes": ["US"], "domain": "ebay.com", "spc_wall_panel_relevance": "high"},
+    {"id": "overstock-us", "platform_id": "overstock", "display_name": "Overstock", "region": "us", "country_codes": ["US"], "domain": "overstock.com", "spc_wall_panel_relevance": "high"},
+    {"id": "home-depot-us", "platform_id": "home-depot", "display_name": "The Home Depot", "region": "us", "country_codes": ["US"], "domain": "homedepot.com", "spc_wall_panel_relevance": "high"},
+    {"id": "lowes-us", "platform_id": "lowes", "display_name": "Lowe's", "region": "us", "country_codes": ["US"], "domain": "lowes.com", "spc_wall_panel_relevance": "high"},
+    {"id": "target-us", "platform_id": "target", "display_name": "Target", "region": "us", "country_codes": ["US"], "domain": "target.com", "spc_wall_panel_relevance": "medium"},
+    {"id": "houzz-us", "platform_id": "houzz", "display_name": "Houzz", "region": "us", "country_codes": ["US"], "domain": "houzz.com", "spc_wall_panel_relevance": "high"},
+    {"id": "etsy-us", "platform_id": "etsy", "display_name": "Etsy", "region": "us", "country_codes": ["US"], "domain": "etsy.com", "spc_wall_panel_relevance": "medium"},
+    {"id": "bed-bath-beyond-us", "platform_id": "bed-bath-beyond", "display_name": "Bed Bath & Beyond", "region": "us", "country_codes": ["US"], "domain": "bedbathandbeyond.com", "spc_wall_panel_relevance": "medium"},
+    {"id": "newegg-us", "platform_id": "newegg", "display_name": "Newegg", "region": "us", "country_codes": ["US"], "domain": "newegg.com", "spc_wall_panel_relevance": "low"},
+    {"id": "build-us", "platform_id": "build", "display_name": "Build.com", "region": "us", "country_codes": ["US"], "domain": "build.com", "spc_wall_panel_relevance": "high"},
+    {"id": "zoro-us", "platform_id": "zoro", "display_name": "Zoro", "region": "us", "country_codes": ["US"], "domain": "zoro.com", "spc_wall_panel_relevance": "medium"},
+    {"id": "grainger-us", "platform_id": "grainger", "display_name": "Grainger", "region": "us", "country_codes": ["US"], "domain": "grainger.com", "spc_wall_panel_relevance": "medium"},
+    {"id": "northern-tool-us", "platform_id": "northern-tool", "display_name": "Northern Tool", "region": "us", "country_codes": ["US"], "domain": "northerntool.com", "spc_wall_panel_relevance": "low"}
+  ]
+}
