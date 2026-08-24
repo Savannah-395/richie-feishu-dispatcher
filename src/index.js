@@ -4,6 +4,7 @@ import path from "node:path";
 import { config } from "./config.js";
 import { downloadMessageAttachments, formatAttachmentSummary, shouldUseAttachmentContext } from "./attachment-manager.js";
 import { extractCodexPrompt, isCodexCommand, runCodexTask } from "./codex-runner.js";
+import { buildMessageCards, extractSourceSection } from "./message-card.js";
 import { createOpenAIClient, generateThreadReply } from "./openai-client.js";
 import { listRepositorySkillRoutes, listRepositorySkills, startGitSync } from "./skill-sync.js";
 import { ThreadQueue } from "./thread-queue.js";
@@ -101,6 +102,54 @@ function getSentMessageId(result) {
     || "";
 }
 
+async function sendCardMessage(chatId, content, {
+  title = "Richie 回复",
+  tone = "info",
+  input = "",
+  source = "未调用外部数据源。",
+  replyTo = "",
+  replyInThread = true,
+} = {}) {
+  const normalized = extractSourceSection(content, source);
+  const cards = buildMessageCards({
+    title,
+    input: truncateText(input, 800),
+    content: normalized.content,
+    source: normalized.source,
+    tone,
+  });
+  const results = [];
+
+  for (const card of cards) {
+    if (replyTo) {
+      // The SDK's high-level send() deliberately falls back to a new main-timeline
+      // message when a reply target is unavailable. Richie must never do that:
+      // every response stays attached to its source topic or fails visibly in logs.
+      const response = await channel.rawClient.im.v1.message.reply({
+        path: { message_id: replyTo },
+        data: {
+          content: JSON.stringify(card),
+          msg_type: "interactive",
+          reply_in_thread: replyInThread,
+        },
+      });
+      const messageId = response.data?.message_id;
+      if (!messageId) {
+        throw new Error(`Feishu card reply returned no message_id for ${replyTo}`);
+      }
+      results.push({ messageId });
+    } else {
+      results.push(await channel.send(chatId, { card }));
+    }
+  }
+
+  return {
+    messageId: getSentMessageId(results[0]),
+    chunkIds: results.map(getSentMessageId).filter(Boolean),
+    results,
+  };
+}
+
 function getSkillRouteLabel(skillRoute, executionKind) {
   if (skillRoute?.skillKey) {
     return skillRoute.skillKey;
@@ -127,18 +176,24 @@ function getExecutionPlan({ skillRoute, executionKind }) {
   return "Use the ordinary reply fallback with the current Feishu topic context.";
 }
 
-async function sendAuditMessage(markdown, { replyTo = "" } = {}) {
+async function sendAuditMessage(markdown, {
+  replyTo = "",
+  title = "Richie Audit",
+  tone = "audit",
+} = {}) {
   if (!config.audit.enabled || !config.audit.chatId) {
     return undefined;
   }
 
   const safeMarkdown = truncateText(redactSensitiveText(markdown), config.audit.maxMessageChars);
-  const options = replyTo
-    ? { replyTo, replyInThread: true }
-    : {};
-
   try {
-    const result = await channel.send(config.audit.chatId, { markdown: safeMarkdown }, options);
+    const result = await sendCardMessage(config.audit.chatId, safeMarkdown, {
+      title,
+      tone,
+      source: "Richie dispatcher 审计日志；字段已做敏感信息脱敏与长度限制。",
+      replyTo,
+      replyInThread: true,
+    });
     return {
       messageId: getSentMessageId(result),
       result,
@@ -164,7 +219,10 @@ async function sendAuditStart({ message, topicId, userEntry, skillRoute, executi
     `- Plan: ${getExecutionPlan({ skillRoute, executionKind })}`,
     task?.runDir ? `- Run dir: ${task.runDir}` : "",
     `- Queue: ${formatQueueSnapshot(queueSnapshot)}`,
-  ].filter(Boolean).join("\n"));
+  ].filter(Boolean).join("\n"), {
+    title: "Richie Audit · Started",
+    tone: "audit",
+  });
 }
 
 async function sendAuditFinish(auditStart, { message, skillRoute, executionKind, result, finalMessage, error, queueSnapshot }) {
@@ -192,6 +250,12 @@ async function sendAuditFinish(auditStart, { message, skillRoute, executionKind,
     `- Queue: ${formatQueueSnapshot(queueSnapshot)}`,
   ].filter(Boolean).join("\n"), {
     replyTo: auditStart?.messageId || "",
+    title: error || result?.timedOut || (result?.exitCode != null && result.exitCode !== 0)
+      ? "Richie Audit · Failed"
+      : "Richie Audit · Completed",
+    tone: error || result?.timedOut || (result?.exitCode != null && result.exitCode !== 0)
+      ? "error"
+      : "success",
   });
 }
 
@@ -340,10 +404,22 @@ function formatSkillRoutePrompt(skillRoute) {
   return lines;
 }
 
-function buildCodexPrompt({ latestMessage, threadTranscript, skillRoute }) {
+function buildCodexPrompt({ latestMessage, threadTranscript, skillRoute, message, topicId }) {
   return [
     "Only use the current Feishu topic context below. Read any local file paths listed in the context when they are relevant.",
     ...formatSkillRoutePrompt(skillRoute),
+    "",
+    "Trusted Feishu delivery context:",
+    `- chat_id: ${message.chatId}`,
+    `- source_message_id: ${message.messageId}`,
+    `- topic_id: ${topicId}`,
+    `- thread_id: ${message.threadId || "(not supplied by event)"}`,
+    `- root_id: ${message.rootId || "(not supplied by event)"}`,
+    "- source_message_id is the valid reply target. If a routed skill explicitly sends its own interactive card, reply to this ID with reply_in_thread=true.",
+    "- The dispatcher always renders your final response as a Feishu Card 2.0 message in this same topic. Do not claim that an om_xxx message ID is missing, and do not ask the user to move the reply manually.",
+    "- Do not send a duplicate plain-text or post message. Return concise Markdown for the dispatcher unless the routed skill deliberately returns a complete Card 2.0 JSON payload.",
+    "- Before any paid API call or data collection, obey the routed skill's intake and confirmation gates. If the product scope or match policy is ambiguous, ask the user first and stop; do not search speculatively.",
+    "- When external data or a project workflow was used, end the final Markdown with a separate `来源与口径：...` block. Include the API/source, market or site, snapshot time where relevant, ranking basis, and known limitations. The dispatcher moves this block into the card's grey source section.",
     "",
     "Current Feishu topic context:",
     threadTranscript || "(no prior context)",
@@ -418,15 +494,19 @@ async function markMessageDone(message, ackReactionId) {
   }
 }
 
-async function sendCodexResult(message, result) {
-  await channel.send(
-    message.chatId,
-    { markdown: result.finalMessage },
-    {
-      replyTo: message.messageId,
-      replyInThread: true,
-    },
-  );
+async function sendCodexResult(message, result, { skillRoute, executionKind } = {}) {
+  const failed = result.timedOut || (result.exitCode != null && result.exitCode !== 0);
+  const routeLabel = getSkillRouteLabel(skillRoute, executionKind);
+  await sendCardMessage(message.chatId, result.finalMessage, {
+    title: failed ? "Richie · 任务未完成" : "Richie · 任务已完成",
+    tone: failed ? "error" : "success",
+    input: message.content,
+    source: failed
+      ? "Richie 本地任务执行状态；本次任务未形成可交付的数据结果。"
+      : `Richie 本地任务（路由：${routeLabel}）；具体外部数据源、快照时间与统计口径以任务正文披露为准。`,
+    replyTo: message.messageId,
+    replyInThread: true,
+  });
 
   for (const artifact of result.artifacts) {
     const payload = artifact.kind === "image"
@@ -460,14 +540,14 @@ async function sendSkillList(message) {
     lines.push(skill.description ? `- ${label}: ${skill.description}` : `- ${label}`);
   }
 
-  await channel.send(
-    message.chatId,
-    { markdown: lines.join("\n") },
-    {
-      replyTo: message.messageId,
-      replyInThread: true,
-    },
-  );
+  await sendCardMessage(message.chatId, lines.join("\n"), {
+    title: "Richie · 可用技能",
+    tone: "info",
+    input: message.content,
+    source: "Richie 本机同步的 GitHub 项目与 SKILL.md 清单；以当前同步状态为准。",
+    replyTo: message.messageId,
+    replyInThread: true,
+  });
 }
 
 async function handleMessage(message) {
@@ -568,14 +648,14 @@ async function handleMessage(message) {
 
       if (routedCodex) {
         if (fullAccessPrefix && !canUseFullAccess(message)) {
-          await channel.send(
-            message.chatId,
-            { text: `当前发送者未被允许使用全电脑模式。senderId: ${message.senderId}` },
-            {
-              replyTo: message.messageId,
-              replyInThread: true,
-            },
-          );
+          await sendCardMessage(message.chatId, `当前发送者未被允许使用全电脑模式。senderId: ${message.senderId}`, {
+            title: "Richie · 权限不足",
+            tone: "warning",
+            input: message.content,
+            source: "Richie dispatcher 权限白名单；未执行本地任务。",
+            replyTo: message.messageId,
+            replyInThread: true,
+          });
           await markComplete();
           return;
         }
@@ -587,14 +667,14 @@ async function handleMessage(message) {
             : messageContent.trim();
         if (!codexPrompt && !hasCurrentAttachments) {
           const expectedPrefix = fullAccessPrefix || config.codex.prefix;
-          await channel.send(
-            message.chatId,
-            { text: `请在 ${expectedPrefix} 后面写清楚要 Codex 执行的任务。` },
-            {
-              replyTo: message.messageId,
-              replyInThread: true,
-            },
-          );
+          await sendCardMessage(message.chatId, `请在 ${expectedPrefix} 后面写清楚要 Codex 执行的任务。`, {
+            title: "Richie · 需要补充",
+            tone: "warning",
+            input: message.content,
+            source: "Richie dispatcher 指令解析；尚未启动任务。",
+            replyTo: message.messageId,
+            replyInThread: true,
+          });
           await markComplete();
           return;
         }
@@ -642,8 +722,10 @@ async function handleMessage(message) {
             latestMessage: codexPrompt || userEntry.content,
             threadTranscript,
             skillRoute,
+            message,
+            topicId,
           }), codexOptions);
-          await sendCodexResult(message, result);
+          await sendCodexResult(message, result, { skillRoute, executionKind });
           await sendAuditFinish(auditStart, {
             message,
             skillRoute,
@@ -692,14 +774,14 @@ async function handleMessage(message) {
           threadTranscript,
         });
 
-        await channel.send(
-          message.chatId,
-          { markdown: reply },
-          {
-            replyTo: message.messageId,
-            replyInThread: true,
-          },
-        );
+        await sendCardMessage(message.chatId, reply, {
+          title: "Richie · 回复",
+          tone: "info",
+          input: message.content,
+          source: "Richie 基于当前飞书话题上下文生成；本次未调用项目 Skill 或外部实时数据源。",
+          replyTo: message.messageId,
+          replyInThread: true,
+        });
 
         await sendAuditFinish(auditStart, {
           message,
@@ -730,14 +812,14 @@ async function handleMessage(message) {
     console.error("Failed to process message", error);
 
     try {
-      await channel.send(
-        message.chatId,
-        { text: "处理这条消息时出错了，请稍后重试。" },
-        {
-          replyTo: message.messageId,
-          replyInThread: true,
-        },
-      );
+      await sendCardMessage(message.chatId, "处理这条消息时出错了，请稍后重试。", {
+        title: "Richie · 处理失败",
+        tone: "error",
+        input: message.content,
+        source: "Richie dispatcher 运行状态；本次回复未完成。",
+        replyTo: message.messageId,
+        replyInThread: true,
+      });
     } catch (sendError) {
       console.error("Failed to send fallback message", sendError);
     }
@@ -753,14 +835,14 @@ channel.on("message", async (message) => {
     console.error("Failed to process message", error);
 
     try {
-      await channel.send(
-        message.chatId,
-        { text: "处理这条消息时出错了，请稍后重试。" },
-        {
-          replyTo: message.messageId,
-          replyInThread: true,
-        },
-      );
+      await sendCardMessage(message.chatId, "处理这条消息时出错了，请稍后重试。", {
+        title: "Richie · 处理失败",
+        tone: "error",
+        input: message.content,
+        source: "Richie dispatcher 运行状态；本次回复未完成。",
+        replyTo: message.messageId,
+        replyInThread: true,
+      });
     } catch (sendError) {
       console.error("Failed to send fallback message", sendError);
     }
