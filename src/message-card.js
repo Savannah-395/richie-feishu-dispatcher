@@ -133,8 +133,8 @@ export function buildMessageCard({
         {
           tag: "markdown",
           element_id: `richie_input_${page}`,
-          text_size: "notation",
-          content: `<font color=\"grey-600\">**本次输入**</font>\n${`${input}`.trim()}`,
+          text_size: "caption",
+          content: `<font color=\"grey-600\">**本次输入**\n${`${input}`.trim()}</font>`,
         },
       ]
     : [];
@@ -145,9 +145,16 @@ export function buildMessageCard({
       update_multi: true,
       width_mode: "default",
       summary: { content: summary },
+      style: {
+        text_size: {
+          body: { default: "normal", pc: "normal", mobile: "normal" },
+          caption: { default: "notation", pc: "notation", mobile: "notation" },
+        },
+      },
     },
     header: {
       title: { tag: "plain_text", content: summary },
+      subtitle: { tag: "plain_text", content: "Richie · 智能调研助手" },
       template: theme.template,
       text_tag_list: [
         {
@@ -166,7 +173,7 @@ export function buildMessageCard({
         {
           tag: "markdown",
           element_id: `richie_content_${page}`,
-          text_size: "normal",
+          text_size: "body",
           content: `**Richie 回复**\n${`${content || "已收到。"}`.trim() || "已收到。"}`,
         },
         {
@@ -176,7 +183,7 @@ export function buildMessageCard({
         {
           tag: "markdown",
           element_id: `richie_source_${page}`,
-          text_size: "notation",
+          text_size: "caption",
           content: `<font color=\"grey-500\">**来源与口径**\n${`${source || "未调用外部数据源。"}`.trim()}${pageLabel}</font>`,
         },
       ],

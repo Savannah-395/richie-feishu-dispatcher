@@ -20,13 +20,21 @@ test("generic Richie cards keep the stable input, reply and source structure", (
 
   assert.equal(card.schema, "2.0");
   assert.equal(card.header.template, "orange");
+  assert.equal(card.header.subtitle.content, "Richie · 智能调研助手");
   const elements = card.body.elements;
   assert.match(elements[0].content, /本次输入/);
   assert.match(elements[1].content, /Richie 回复/);
   assert.equal(elements.at(-2).tag, "hr");
-  assert.equal(elements.at(-1).text_size, "notation");
+  assert.equal(elements.at(-1).text_size, "caption");
   assert.match(elements.at(-1).content, /grey-500/);
   assert.match(elements.at(-1).content, /来源与口径/);
+});
+
+test("dispatcher prompt cannot replace a native candidate card with a preview image", async () => {
+  const source = await readFile(new URL("../src/codex-runner.js", import.meta.url), "utf8");
+  assert.match(source, /Never substitute a PNG\/JPG preview/);
+  assert.match(source, /use that project's card builder and topic-reply sender/);
+  assert.doesNotMatch(source, /Use PNG\/JPG for screenshots or image previews/);
 });
 
 test("a trailing source section is separated from the reply body", () => {
