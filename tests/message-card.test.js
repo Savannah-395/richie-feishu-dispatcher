@@ -57,6 +57,8 @@ test("dispatcher has no direct text or markdown response payload", async () => {
   const source = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
   assert.doesNotMatch(source, /\{\s*text\s*:/);
   assert.doesNotMatch(source, /\{\s*markdown\s*:/);
+  assert.doesNotMatch(source, /\{\s*file\s*:/);
+  assert.doesNotMatch(source, /\{\s*image\s*:/);
   assert.match(source, /rawClient\.im\.v1\.message\.reply/);
   assert.match(source, /msg_type: "interactive"/);
   assert.match(source, /reply_in_thread: replyInThread/);

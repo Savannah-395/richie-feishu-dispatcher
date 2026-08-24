@@ -418,6 +418,7 @@ function buildCodexPrompt({ latestMessage, threadTranscript, skillRoute, message
     "- source_message_id is the valid reply target. If a routed skill explicitly sends its own interactive card, reply to this ID with reply_in_thread=true.",
     "- The dispatcher always renders your final response as a Feishu Card 2.0 message in this same topic. Do not claim that an om_xxx message ID is missing, and do not ask the user to move the reply manually.",
     "- Do not send a duplicate plain-text or post message. Return concise Markdown for the dispatcher unless the routed skill deliberately returns a complete Card 2.0 JSON payload.",
+    "- The dispatcher does not send raw file or image messages. A routed skill must upload formal deliverables to Feishu Drive and expose the cloud URL inside a Card 2.0 delivery reply. Keep local-only artifacts out of the user-visible reply.",
     "- Before any paid API call or data collection, obey the routed skill's intake and confirmation gates. If the product scope or match policy is ambiguous, ask the user first and stop; do not search speculatively.",
     "- When external data or a project workflow was used, end the final Markdown with a separate `来源与口径：...` block. Include the API/source, market or site, snapshot time where relevant, ranking basis, and known limitations. The dispatcher moves this block into the card's grey source section.",
     "",
@@ -507,17 +508,6 @@ async function sendCodexResult(message, result, { skillRoute, executionKind } = 
     replyTo: message.messageId,
     replyInThread: true,
   });
-
-  for (const artifact of result.artifacts) {
-    const payload = artifact.kind === "image"
-      ? { image: { source: artifact.path } }
-      : { file: { source: artifact.path, fileName: artifact.fileName || path.basename(artifact.path) } };
-
-    await channel.send(message.chatId, payload, {
-      replyTo: message.messageId,
-      replyInThread: true,
-    });
-  }
 }
 
 async function sendSkillList(message) {
