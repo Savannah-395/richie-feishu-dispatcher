@@ -32,6 +32,9 @@ const channel = createLarkChannel({
     requireMention: config.feishu.requireMentionToReply,
     dmMode: "ignore",
   },
+  safety: {
+    chatQueue: { enabled: false },
+  },
   includeRawInMessage: false,
 });
 

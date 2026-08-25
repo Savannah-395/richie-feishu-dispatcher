@@ -71,3 +71,8 @@ test("dispatcher has no direct text or markdown response payload", async () => {
   assert.match(source, /msg_type: "interactive"/);
   assert.match(source, /reply_in_thread: replyInThread/);
 });
+
+test("independent topics in the same chat are not serialized by the SDK", async () => {
+  const source = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
+  assert.match(source, /safety:\s*\{\s*chatQueue:\s*\{\s*enabled:\s*false\s*\}/);
+});
