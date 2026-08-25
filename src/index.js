@@ -5,6 +5,7 @@ import { config } from "./config.js";
 import { downloadMessageAttachments, formatAttachmentSummary, shouldUseAttachmentContext } from "./attachment-manager.js";
 import { extractCodexPrompt, isCodexCommand, runCodexTask } from "./codex-runner.js";
 import { buildMessageCards, extractSourceSection } from "./message-card.js";
+import { shouldSuppressDispatcherReply } from "./native-reply.js";
 import { createOpenAIClient, generateThreadReply } from "./openai-client.js";
 import { listRepositorySkillRoutes, listRepositorySkills, startGitSync } from "./skill-sync.js";
 import { ThreadQueue } from "./thread-queue.js";
@@ -499,6 +500,14 @@ async function markMessageDone(message, ackReactionId) {
 }
 
 async function sendCodexResult(message, result, { skillRoute, executionKind } = {}) {
+  if (shouldSuppressDispatcherReply(result)) {
+    console.log(
+      `Skipped dispatcher completion card because ${result.nativeReply.sender} already sent `
+      + `${result.nativeReply.messageCount} native topic card(s) for ${message.messageId}`,
+    );
+    return { suppressed: true };
+  }
+
   const failed = result.timedOut || (result.exitCode != null && result.exitCode !== 0);
   const routeLabel = getSkillRouteLabel(skillRoute, executionKind);
   await sendCardMessage(message.chatId, result.finalMessage, {
@@ -511,6 +520,7 @@ async function sendCodexResult(message, result, { skillRoute, executionKind } = 
     replyTo: message.messageId,
     replyInThread: true,
   });
+  return { suppressed: false };
 }
 
 async function sendSkillList(message) {

@@ -113,6 +113,11 @@ RICHIE_GITHUB_PROJECT_REPOS=Savannah-395/project-a,Savannah-395/project-b
 - 指定 skill 群：只要命中 `deploy/richie/allowed-chats.json` 或 skill description 里的 `chat_id`，不用 @，直接走该 skill。
 - 非指定 skill 群：话题第一条消息必须 @ richie，后续同一话题内继续交互不需要重复 @。
 
+项目 Skill 可以使用自己的 Card 2.0 发送器。Dispatcher 会为每个 Codex 任务注入
+`RICHIE_NATIVE_REPLY_MARKER=<run>/native-reply.json`；项目发送器只有在飞书确认发送成功后才写入该标记。
+标记存在时，Dispatcher 只记录任务状态，不再补发“任务已完成/未完成”卡。这样候选分页、澄清卡、错误卡和交付卡
+不会再跟一张无业务价值的外层完成回执。
+
 ```env
 BOT_REQUIRE_MENTION_TO_START=true
 BOT_REQUIRE_MENTION_TO_REPLY=false

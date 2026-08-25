@@ -8,6 +8,10 @@ import {
   parseInteractiveCard,
   splitCardContent,
 } from "../src/message-card.js";
+import { readNativeReplyMarker, shouldSuppressDispatcherReply } from "../src/native-reply.js";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 test("generic Richie cards keep the stable input, reply and source structure", () => {
   const [card] = buildMessageCards({
@@ -75,4 +79,29 @@ test("dispatcher has no direct text or markdown response payload", async () => {
 test("independent topics in the same chat are not serialized by the SDK", async () => {
   const source = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
   assert.match(source, /safety:\s*\{\s*chatQueue:\s*\{\s*enabled:\s*false\s*\}/);
+});
+
+test("a successful project-native card suppresses the dispatcher completion card", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "richie-native-reply-"));
+  const markerPath = path.join(directory, "native-reply.json");
+  await writeFile(markerPath, JSON.stringify({
+    version: 1,
+    sent: true,
+    sender: "reply_richie_card.py",
+    source_message_id: "om_source123",
+    reply_in_thread: true,
+    message_count: 1,
+  }), "utf8");
+
+  const nativeReply = await readNativeReplyMarker(markerPath);
+  assert.equal(nativeReply.sent, true);
+  assert.equal(nativeReply.messageCount, 1);
+  assert.equal(shouldSuppressDispatcherReply({ nativeReply }), true);
+  assert.equal(shouldSuppressDispatcherReply({}), false);
+});
+
+test("dispatcher passes the native-reply marker path to Codex tasks", async () => {
+  const source = await readFile(new URL("../src/codex-runner.js", import.meta.url), "utf8");
+  assert.match(source, /NATIVE_REPLY_MARKER_ENV/);
+  assert.match(source, /native-reply\.json/);
 });

@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { listRepositorySkills } from "./skill-sync.js";
+import { NATIVE_REPLY_MARKER_ENV, readNativeReplyMarker } from "./native-reply.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, "..");
@@ -177,6 +178,7 @@ export async function runCodexTask(config, userPrompt, options = {}) {
   const runDir = path.join(projectRoot, "logs", "codex-runs", taskId);
   const artifactsDir = path.join(runDir, "artifacts");
   const finalMessagePath = path.join(runDir, "final.md");
+  const nativeReplyMarkerPath = path.join(runDir, "native-reply.json");
   const workingRoot = options.workingRoot || projectRoot;
   const sandbox = options.sandbox || config.sandbox;
   const fullAccess = sandbox === "danger-full-access";
@@ -246,6 +248,7 @@ export async function runCodexTask(config, userPrompt, options = {}) {
         PYTHONUTF8: "1",
         PYTHONIOENCODING: "utf-8",
         NO_COLOR: "1",
+        [NATIVE_REPLY_MARKER_ENV]: nativeReplyMarkerPath,
       },
     });
 
@@ -269,6 +272,7 @@ export async function runCodexTask(config, userPrompt, options = {}) {
   }
 
   const artifacts = await listArtifacts(artifactsDir);
+  const nativeReply = await readNativeReplyMarker(nativeReplyMarkerPath);
   const fallback = result.timedOut
     ? `Codex task ${taskId} timed out after ${Math.round(config.timeoutMs / 1000)} seconds.`
     : result.spawnError
@@ -284,6 +288,7 @@ export async function runCodexTask(config, userPrompt, options = {}) {
     stderr: result.stderr,
     timedOut: result.timedOut,
     exitCode: result.code,
+    nativeReply,
   };
 }
 
