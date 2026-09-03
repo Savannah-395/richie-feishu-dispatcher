@@ -325,6 +325,34 @@ function parseGitHubRepositorySpec(value, defaultOwner = "") {
   };
 }
 
+function excludedRepositoryKeys(syncConfig) {
+  const defaultOwner = syncConfig.githubProjectOwner || "";
+  const keys = new Set();
+
+  for (const value of syncConfig.githubExcludedProjectRepos || []) {
+    const raw = String(value || "").trim();
+    if (!raw) {
+      continue;
+    }
+    const parsed = parseGitHubRepositorySpec(raw, defaultOwner);
+    if (parsed) {
+      keys.add(parsed.name.toLowerCase());
+      keys.add(parsed.fullName.toLowerCase());
+    } else {
+      keys.add(raw.toLowerCase());
+    }
+  }
+
+  return keys;
+}
+
+export function isGitHubProjectExcluded(syncConfig, repository) {
+  const keys = excludedRepositoryKeys(syncConfig);
+  const name = String(repository?.name || "").trim().toLowerCase();
+  const fullName = String(repository?.fullName || "").trim().toLowerCase();
+  return Boolean((name && keys.has(name)) || (fullName && keys.has(fullName)));
+}
+
 async function getCurrentRepository(syncConfig) {
   const remote = syncConfig.remote || "origin";
   const result = await runCommand("git", ["remote", "get-url", remote], { timeoutMs: 10000 });
@@ -424,7 +452,7 @@ async function discoverGitHubRepositories(syncConfig, currentRepository) {
   const seen = new Set();
   return repos.filter((repo) => {
     const fullName = repo.fullName.toLowerCase();
-    if (fullName === currentFullName || seen.has(fullName)) {
+    if (fullName === currentFullName || seen.has(fullName) || isGitHubProjectExcluded(syncConfig, repo)) {
       return false;
     }
     seen.add(fullName);
@@ -437,8 +465,12 @@ async function syncGitHubProjectRepositories(syncConfig) {
   const cloneRoot = getCloneRoot(syncConfig, projectRoots);
   const currentRepository = await getCurrentRepository(syncConfig);
   const manifest = await readProjectRepoManifest();
-  const managedRepositories = new Map(manifest.repositories.map((repo) => [repo.fullName?.toLowerCase(), repo]));
-  const managedPaths = new Set(manifest.repositories
+  const managedEntries = manifest.repositories.filter((repo) => !isGitHubProjectExcluded(syncConfig, {
+    fullName: repo.fullName,
+    name: repo.targetPath ? path.basename(repo.targetPath) : "",
+  }));
+  const managedRepositories = new Map(managedEntries.map((repo) => [repo.fullName?.toLowerCase(), repo]));
+  const managedPaths = new Set(managedEntries
     .map((repo) => repo.targetPath ? path.resolve(repo.targetPath) : "")
     .filter(Boolean));
   const results = [];
@@ -586,6 +618,10 @@ async function listSiblingProjects(syncConfig) {
 
     for (const entry of entries) {
       if (!entry.isDirectory() || !isValidProjectDirectoryName(entry.name)) {
+        continue;
+      }
+
+      if (isGitHubProjectExcluded(syncConfig, { name: entry.name })) {
         continue;
       }
 

@@ -64,6 +64,7 @@ async function buildSkillInstructions(config) {
     githubProjectOwner: config.githubProjectOwner,
     githubAutoDiscoverProjectRepos: config.githubAutoDiscoverProjectRepos,
     githubProjectRepos: config.githubProjectRepos,
+    githubExcludedProjectRepos: config.githubExcludedProjectRepos,
     githubProjectCloneRoot: config.githubProjectCloneRoot,
   });
   const lines = [

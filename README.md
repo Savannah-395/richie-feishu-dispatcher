@@ -95,6 +95,7 @@ RICHIE_PROJECT_ROOTS=..
 RICHIE_GITHUB_PROJECT_OWNER=Savannah-395
 RICHIE_GITHUB_AUTO_DISCOVER_PROJECT_REPOS=true
 RICHIE_GITHUB_PROJECT_REPOS=
+RICHIE_GITHUB_EXCLUDED_PROJECT_REPOS=
 RICHIE_GITHUB_PROJECT_CLONE_ROOT=..
 RICHIE_INSTALL_CODEX_SKILLS=true
 ```
@@ -107,6 +108,14 @@ RICHIE_GITHUB_PROJECT_REPOS=Savannah-395/project-a,Savannah-395/project-b
 ```
 
 私有 repo 的发现优先使用 `GITHUB_TOKEN` / `GH_TOKEN`；如果没有环境变量，会尝试读取本机 Git Credential Manager 里已有的 GitHub 凭据。clone 和 pull 不会把 token 写进仓库。
+
+迁移或停用项目仓库时，可继续保留自动发现，同时按仓库名或 `owner/repo` 排除旧仓库：
+
+```env
+RICHIE_GITHUB_EXCLUDED_PROJECT_REPOS=spc-wall-panel-research
+```
+
+排除项不会被自动克隆、拉取、扫描或安装为 Codex skill；其他项目仍按原来的 10 分钟周期同步。
 
 回复策略默认分两层：
 
