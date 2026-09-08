@@ -400,9 +400,10 @@ test("resident callback writes confirmed Base fields with ongoing status once an
   assert.equal(calls.baseWrites.length, 1, "retry must recover the prior write instead of creating again");
   assert.equal(calls.textMessages.length, 1);
   const success = JSON.parse(calls.textMessages[0].data.content).text;
-  assert.match(success, /完成 Maxhub 功能测试并反馈结果/);
-  assert.match(success, /<at user_id="ou_owner">段星岚<\/at>/);
-  assert.match(success, /写入成功了。$/);
+  assert.equal(
+    success,
+    "✅ 任务录入成功\n完成 Maxhub 功能测试并反馈结果 · <at user_id=\"ou_owner\">段星岚</at>",
+  );
 
   await handleTaskIntakeCardAction({
     event,
@@ -554,6 +555,8 @@ test("resident workflow recovers missing owner IDs from source mentions", async 
     ["进行中"],
   ]);
   const successText = JSON.parse(calls.textMessages[0].data.content).text;
+  assert.match(successText, /^✅ 任务录入成功\n1\. /);
+  assert.match(successText, /\n2\. /);
   assert.match(successText, /<at user_id="ou_owner">段星岚<\/at>/);
   assert.match(successText, /<at user_id="ou_yanyu">颜宇<\/at>/);
 });

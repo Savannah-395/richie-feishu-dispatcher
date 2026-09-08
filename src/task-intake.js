@@ -1018,10 +1018,12 @@ function safeMessageText(value) {
 }
 
 function successText(tasks) {
-  const items = tasks.map((task) => (
-    `${safeMessageText(task.description)} <at user_id="${task.ownerOpenId}">${safeMessageText(task.ownerName)}</at>`
+  const showNumbers = tasks.length > 1;
+  const items = tasks.map((task, index) => (
+    `${showNumbers ? `${index + 1}. ` : ""}${safeMessageText(task.description)} · `
+      + `<at user_id="${task.ownerOpenId}">${safeMessageText(task.ownerName)}</at>`
   ));
-  return `${items.join("、")}，写入成功了。`;
+  return ["✅ 任务录入成功", ...items].join("\n");
 }
 
 export async function handleTaskIntakeCardAction({ event, route, channel, stateDir }) {
