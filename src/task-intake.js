@@ -60,15 +60,22 @@ function uniqueStrings(value) {
   return [...new Set(values.map((item) => asText(`${item}`)).filter(Boolean))];
 }
 
+function cellStrings(value) {
+  const values = Array.isArray(value) ? value : value == null ? [] : [value];
+  return [...new Set(values.map((item) => {
+    if (typeof item === "string" || typeof item === "number") {
+      return asText(`${item}`);
+    }
+    return asText(item?.name || item?.text || item?.value);
+  }).filter(Boolean))];
+}
+
 function normalizeDescription(value) {
   return asText(value).normalize("NFKC").replace(/\s+/g, " ");
 }
 
 function firstNonEmpty(value) {
-  if (Array.isArray(value)) {
-    return asText(value[0]?.name || value[0]?.text || value[0]);
-  }
-  return asText(value?.name || value?.text || value);
+  return cellStrings(value)[0] || "";
 }
 
 function normalizeDate(value, fallback = 0) {
@@ -242,7 +249,7 @@ function ownerIds(value) {
 
 function latestOwnerDefaults(records, ownerOpenId, config) {
   if (!ownerOpenId) {
-    return { group: "", bases: [] };
+    return { group: "", bases: [], department: "" };
   }
   const names = Object.fromEntries(Object.entries(config.fields).map(([key, field]) => [key, field.name]));
   const relevant = records
@@ -254,18 +261,96 @@ function latestOwnerDefaults(records, ownerOpenId, config) {
 
   let group = "";
   let bases = [];
+  let department = "";
   for (const record of relevant) {
     if (!group) {
       group = firstNonEmpty(record.fields?.[names.group]);
     }
     if (bases.length === 0) {
-      bases = uniqueStrings(record.fields?.[names.base]);
+      bases = cellStrings(record.fields?.[names.base]);
     }
-    if (group && bases.length > 0) {
+    if (!department) {
+      department = firstNonEmpty(record.fields?.[names.department]);
+    }
+    if (group && bases.length > 0 && department) {
       break;
     }
   }
-  return { group, bases };
+  return { group, bases, department };
+}
+
+function organizationLabels(user) {
+  const labels = [
+    user?.nickname,
+    user?.department,
+    user?.work_station,
+    user?.city,
+    user?.geo,
+    user?.job_title,
+  ];
+  for (const item of user?.department_path || []) {
+    labels.push(
+      item?.department_name?.name,
+      item?.department_path?.department_path_name?.name,
+    );
+  }
+  for (const item of user?.custom_attrs || []) {
+    labels.push(
+      item?.value?.text,
+      item?.value?.name,
+      item?.value?.option_value,
+    );
+  }
+  return uniqueStrings(labels);
+}
+
+function directoryUser(user, fallback = {}) {
+  const openId = asText(user?.open_id || user?.openId || fallback.open_id || fallback.openId);
+  const labels = uniqueStrings([
+    ...(user?.organizationLabels || user?.organization_labels || []),
+    ...(fallback.organizationLabels || fallback.organization_labels || []),
+    ...organizationLabels(user),
+  ]);
+  return {
+    openId,
+    name: asText(user?.name || fallback.name) || openId,
+    organizationLabels: labels,
+  };
+}
+
+function mergeDirectoryUser(current, incoming) {
+  if (!current) {
+    return directoryUser(incoming);
+  }
+  return {
+    openId: current.openId,
+    name: current.name || incoming.name || current.openId,
+    organizationLabels: uniqueStrings([
+      ...(current.organizationLabels || []),
+      ...(incoming.organizationLabels || incoming.organization_labels || []),
+    ]),
+  };
+}
+
+async function loadMentionOwnerProfiles(client, owners) {
+  if (typeof client?.contact?.v3?.user?.get !== "function") {
+    return owners.map((owner) => directoryUser(owner));
+  }
+  return Promise.all(owners.map(async (owner) => {
+    try {
+      const response = normalizeApiError(await client.contact.v3.user.get({
+        params: {
+          user_id_type: "open_id",
+          department_id_type: "open_department_id",
+        },
+        path: { user_id: owner.openId },
+      }), `读取${owner.name || "任务负责人"}的通讯录编制信息`);
+      return directoryUser(response.data?.user || {}, owner);
+    } catch (error) {
+      console.warn(`Unable to load organization profile for ${owner.openId}`, error);
+      return directoryUser(owner);
+    }
+  }));
 }
 
 async function loadEmployeeDirectory(client, config, { force = false } = {}) {
@@ -305,7 +390,7 @@ async function loadEmployeeDirectory(client, config, { force = false } = {}) {
   for await (const page of iterator) {
     for (const user of page?.items || []) {
       if (isActiveEmployee(user, excludedOpenIds)) {
-        usersById.set(user.open_id, { openId: user.open_id, name: asText(user.name) || user.open_id });
+        usersById.set(user.open_id, directoryUser(user));
       }
     }
   }
@@ -330,8 +415,60 @@ function stripAssignmentMentions(description, sourceMessage) {
   return result.replace(/\s+/g, " ").trim();
 }
 
-function normalizeTasks(protocol, message, config, records) {
+function normalizedOrgText(value) {
+  return asText(value).normalize("NFKC").toLocaleLowerCase("zh-CN").replace(/[\s|｜/\\·()（）_-]+/g, "");
+}
+
+function organizationOption(user, field, configuredMappings = {}) {
+  const options = optionItems(field).map((option) => option.value);
+  const allowed = new Set(options);
+  const labels = (user?.organizationLabels || []).map(normalizedOrgText).filter(Boolean);
+  for (const [value, aliases] of Object.entries(configuredMappings || {})) {
+    if (!allowed.has(value)) {
+      continue;
+    }
+    const candidates = uniqueStrings([value, ...(Array.isArray(aliases) ? aliases : [aliases])]);
+    if (candidates.some((candidate) => {
+      const normalized = normalizedOrgText(candidate);
+      return normalized && labels.some((label) => label.includes(normalized));
+    })) {
+      return value;
+    }
+  }
+  return [...options]
+    .sort((left, right) => right.length - left.length)
+    .find((option) => {
+      const normalized = normalizedOrgText(option);
+      return normalized && labels.some((label) => label.includes(normalized));
+    }) || "";
+}
+
+function organizationDefaults(user, schema, config) {
+  const mappings = config.organization_defaults || {};
+  const genericBaseValues = new Set([
+    ...optionItems(schema.group).map((option) => option.value),
+    ...Object.keys(mappings.base || {}),
+  ]);
+  const specificBaseField = {
+    ...schema.base,
+    property: {
+      ...schema.base?.property,
+      options: (schema.base?.property?.options || [])
+        .filter((option) => !genericBaseValues.has(asText(option?.name))),
+    },
+  };
+  const base = organizationOption(user, specificBaseField)
+    || organizationOption(user, schema.base, mappings.base);
+  return {
+    group: organizationOption(user, schema.group, mappings.group),
+    bases: base ? [base] : [],
+    department: organizationOption(user, schema.department, mappings.department),
+  };
+}
+
+function normalizeTasks(protocol, message, config, records, directory, schema) {
   const sourceMentions = buildStructuredMentions(message, config.bot_open_id);
+  const directoryById = new Map(directory.map((user) => [user.openId, user]));
   const rawTasks = Array.isArray(protocol.tasks) ? protocol.tasks : [];
   return rawTasks.map((candidate) => {
     const ownerName = asText(candidateValue(candidate, "owner_name", "ownerName"));
@@ -341,6 +478,7 @@ function normalizeTasks(protocol, message, config, records) {
       .map((mention) => mention.open_id));
     const ownerOpenId = suppliedOwnerOpenId || (ownerIdsByName.length === 1 ? ownerIdsByName[0] : "");
     const historical = latestOwnerDefaults(records, ownerOpenId, config);
+    const organization = organizationDefaults(directoryById.get(ownerOpenId), schema, config);
     return {
       description: stripAssignmentMentions(asText(candidateValue(
         candidate,
@@ -350,11 +488,15 @@ function normalizeTasks(protocol, message, config, records) {
       )), message),
       ownerOpenId,
       ownerName,
-      group: historical.group || asText(candidateValue(candidate, "group")),
+      group: historical.group || organization.group || asText(candidateValue(candidate, "group")),
       bases: historical.bases.length > 0
         ? historical.bases
-        : uniqueStrings(candidateValue(candidate, "bases", "base")),
-      department: asText(candidateValue(candidate, "department")),
+        : organization.bases.length > 0
+          ? organization.bases
+          : uniqueStrings(candidateValue(candidate, "bases", "base")),
+      department: historical.department
+        || organization.department
+        || asText(candidateValue(candidate, "department")),
       reminder: asText(candidateValue(candidate, "reminder_frequency", "reminder")) || "一周一次",
       duplicateMode: asText(candidateValue(candidate, "duplicate_mode", "duplicateMode")) || "none",
       duplicateNote: asText(candidateValue(candidate, "duplicate_note", "duplicateNote")),
@@ -372,8 +514,8 @@ function mergeDirectoryUsers(directory, additionalUsers) {
   const usersById = new Map(directory.map((user) => [user.openId, user]));
   for (const user of additionalUsers || []) {
     const openId = asText(user?.openId || user?.open_id);
-    if (openId && !usersById.has(openId)) {
-      usersById.set(openId, { openId, name: asText(user?.name) || openId });
+    if (openId) {
+      usersById.set(openId, mergeDirectoryUser(usersById.get(openId), directoryUser(user)));
     }
   }
   return [...usersById.values()].sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
@@ -406,6 +548,7 @@ function staticSelect({ name, placeholder, options, initial, multi = false }) {
     tag,
     name,
     required: true,
+    width: "fill",
     placeholder: cardText(placeholder),
     options: options.map((option) => ({ text: cardText(option.text), value: option.value })),
     ...(multi
@@ -414,16 +557,36 @@ function staticSelect({ name, placeholder, options, initial, multi = false }) {
   };
 }
 
-function column(elements) {
-  return { tag: "column", width: "weighted", weight: 1, elements };
+function column(elements, weight = 1) {
+  return { tag: "column", width: "weighted", weight, vertical_spacing: "4px", elements };
 }
 
-function twoColumns(left, right) {
+function twoColumns(left, right, { leftWeight = 1, rightWeight = 1 } = {}) {
   return {
     tag: "column_set",
-    flex_mode: "stretch",
+    flex_mode: "none",
     horizontal_spacing: "12px",
-    columns: [column(left), column(right)],
+    columns: [column(left, leftWeight), column(right, rightWeight)],
+  };
+}
+
+function confirmButtonRow() {
+  return {
+    tag: "column_set",
+    flex_mode: "none",
+    horizontal_align: "right",
+    columns: [{
+      tag: "column",
+      width: "120px",
+      elements: [{
+        tag: "button",
+        name: "confirm_write",
+        form_action_type: "submit",
+        type: "primary_filled",
+        width: "fill",
+        text: cardText("确认写入"),
+      }],
+    }],
   };
 }
 
@@ -459,38 +622,41 @@ export function buildTaskIntakeCard({ tasks, directory, schema }) {
   const baseOptions = optionItems(schema.base);
   const departmentOptions = optionItems(schema.department);
   const reminderOptions = optionItems(schema.reminder);
-  const elements = [markdown("<font color='grey'>确认后写入任务管理表</font>")];
+  const elements = [];
 
   tasks.forEach((task, offset) => {
     const index = offset + 1;
     if (index > 1) {
-      elements.push({ tag: "hr", margin: "12px 0" });
+      elements.push({ tag: "hr", margin: "16px 0 12px 0" });
     }
     if (tasks.length > 1) {
-      elements.push(markdown(`**任务 ${index}**`));
+      elements.push(markdown(`**<font color='blue'>任务 ${index}</font>**`));
     }
     elements.push(
-      markdown("**任务描述**"),
-      {
-        tag: "input",
-        name: `t${index}_desc`,
-        input_type: "multiline_text",
-        required: true,
-        rows: 2,
-        auto_resize: true,
-        max_rows: 4,
-        default_value: task.description,
-        placeholder: cardText("请输入任务描述"),
-      },
-      markdown("**任务负责人**"),
-      {
-        tag: "select_person",
-        name: `t${index}_owner`,
-        required: true,
-        options: ownerOptions,
-        initial_option: task.ownerOpenId || undefined,
-        placeholder: cardText("搜索全集团在职员工"),
-      },
+      twoColumns(
+        [markdown("**任务描述**"), {
+          tag: "input",
+          name: `t${index}_desc`,
+          input_type: "multiline_text",
+          required: true,
+          width: "fill",
+          rows: 1,
+          auto_resize: true,
+          max_rows: 3,
+          default_value: task.description,
+          placeholder: cardText("请输入任务描述"),
+        }],
+        [markdown("**任务负责人**"), {
+          tag: "select_person",
+          name: `t${index}_owner`,
+          required: true,
+          width: "fill",
+          options: ownerOptions,
+          initial_option: task.ownerOpenId || undefined,
+          placeholder: cardText("搜索全集团在职员工"),
+        }],
+        { leftWeight: 3, rightWeight: 2 },
+      ),
       twoColumns(
         [markdown("**集团**"), staticSelect({
           name: `t${index}_group`,
@@ -524,23 +690,25 @@ export function buildTaskIntakeCard({ tasks, directory, schema }) {
     );
   });
 
-  elements.push({
-    tag: "button",
-    name: "confirm_write",
-    form_action_type: "submit",
-    type: "primary",
-    text: cardText("确认"),
-  });
+  elements.push(confirmButtonRow());
 
   return {
     schema: "2.0",
-    config: { update_multi: true },
+    config: { update_multi: true, width_mode: "default" },
     header: {
       template: "blue",
       title: cardText("任务录入确认"),
+      icon: { tag: "standard_icon", token: "todo_colorful" },
+      padding: "10px 12px",
     },
     body: {
-      elements: [{ tag: "form", name: "task_intake", horizontal_align: "right", elements }],
+      padding: "12px 12px 16px 12px",
+      elements: [{
+        tag: "form",
+        name: "task_intake",
+        vertical_spacing: "12px",
+        elements,
+      }],
     },
   };
 }
@@ -642,16 +810,17 @@ export async function handleTaskIntakeResult({ route, message, result, channel, 
   }
 
   const client = channel.rawClient;
-  const [loadedDirectory, fields, records] = await Promise.all([
+  const trustedMentionOwners = sourceMentionOwners(message, config);
+  const [loadedDirectory, fields, records, mentionProfiles] = await Promise.all([
     loadEmployeeDirectory(client, config),
     listBaseFields(client, config),
     listBaseRecords(client, config),
+    loadMentionOwnerProfiles(client, trustedMentionOwners),
   ]);
-  const trustedMentionOwners = sourceMentionOwners(message, config);
-  const directory = mergeDirectoryUsers(loadedDirectory, trustedMentionOwners);
+  const directory = mergeDirectoryUsers(loadedDirectory, mentionProfiles);
   const schema = verifyBaseSchema(fields, config);
   const directoryIds = new Set(directory.map((user) => user.openId));
-  let tasks = normalizeTasks(protocol, message, config, records);
+  let tasks = normalizeTasks(protocol, message, config, records, directory, schema);
   tasks = findExactDuplicates(tasks, records, config).map((task) => ({
     ...task,
     ownerOpenId: directoryIds.has(task.ownerOpenId) ? task.ownerOpenId : "",
@@ -688,7 +857,7 @@ export async function handleTaskIntakeResult({ route, message, result, channel, 
       createdAt: new Date().toISOString(),
       expiresAt: new Date(Date.now() + (config.pending_ttl_hours || 72) * 60 * 60 * 1000).toISOString(),
       tasks: group.tasks,
-      sourceMentionOwners: trustedMentionOwners,
+      sourceMentionOwners: mentionProfiles,
       part: offset + 1,
       partCount: groups.length,
     });

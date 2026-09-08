@@ -18,13 +18,21 @@ const fields = [
     field_id: "group",
     field_name: "集团",
     ui_type: "SingleSelect",
-    property: { options: [{ name: "医疗" }, { name: "再生" }] },
+    property: { options: [{ name: "医疗" }, { name: "再生" }, { name: "集团" }] },
   },
   {
     field_id: "base",
     field_name: "基地",
     ui_type: "MultiSelect",
-    property: { options: [{ name: "青州" }, { name: "镇江" }] },
+    property: {
+      options: [
+        { name: "集团" },
+        { name: "医疗" },
+        { name: "再生" },
+        { name: "青州" },
+        { name: "镇江" },
+      ],
+    },
   },
   {
     field_id: "department",
@@ -67,10 +75,28 @@ function makeClient(calls) {
       v3: {
         user: {
           findByDepartment: async () => ({ code: 0, data: { items: [] } }),
+          get: async ({ path: { user_id: userId } }) => ({
+            code: 0,
+            data: {
+              user: userId === "ou_second" || userId === "ou_yanyu"
+                ? { open_id: userId, name: "颜宇", nickname: "Haze | 英科再生 镇江 生产部" }
+                : { open_id: userId, name: "段星岚", nickname: "Savannah | 英科医疗 AIT部" },
+            },
+          }),
           listWithIterator: async () => asyncPages({
             items: [
-              { open_id: "ou_owner", name: "段星岚", status: { is_activated: true } },
-              { open_id: "ou_second", name: "童敏慧", status: { is_activated: true } },
+              {
+                open_id: "ou_owner",
+                name: "段星岚",
+                nickname: "Savannah | 英科医疗 AIT部",
+                status: { is_activated: true },
+              },
+              {
+                open_id: "ou_second",
+                name: "童敏慧",
+                nickname: "Haze | 英科再生 镇江 生产部",
+                status: { is_activated: true },
+              },
               { open_id: "ou_bot", name: "Richie", status: { is_activated: true } },
             ],
           }),
@@ -151,12 +177,21 @@ test("compact card has exact Base labels, two-column short fields and strong tas
   for (const label of ["任务描述", "任务负责人", "集团", "基地", "部门", "提醒频率"]) {
     assert.match(serialized, new RegExp(label));
   }
-  assert.equal((serialized.match(/column_set/g) || []).length, 4);
+  assert.equal((serialized.match(/column_set/g) || []).length, 7);
   assert.equal((serialized.match(/\"tag\":\"hr\"/g) || []).length, 1);
   assert.doesNotMatch(serialized, /识别结果|查重结果|处理方式|任务已完成/);
-  assert.match(serialized, /\"rows\":2/);
+  assert.doesNotMatch(serialized, /确认后写入任务管理表/);
+  assert.match(serialized, /\"rows\":1/);
   assert.match(serialized, /\"auto_resize\":true/);
+  assert.doesNotMatch(serialized, /leftWeight|rightWeight/, "layout options must not leak into card JSON");
   assert.match(serialized, /\"form_action_type\":\"submit\"/);
+  const firstTaskRow = card.body.elements[0].elements.find((element) => (
+    element.tag === "column_set"
+      && element.columns?.[0]?.elements?.some((item) => item.name === "t1_desc")
+  ));
+  assert.equal(firstTaskRow.flex_mode, "none");
+  assert.deepEqual(firstTaskRow.columns.map((item) => item.weight), [3, 2]);
+  assert.equal(firstTaskRow.columns[1].elements[1].name, "t1_owner");
 });
 
 test("resident callback writes only confirmed Base fields once and sends one structured-mention text", async (context) => {
@@ -192,6 +227,7 @@ test("resident callback writes only confirmed Base fields once and sends one str
         任务负责人: [{ id: "ou_owner" }],
         集团: "再生",
         基地: ["镇江"],
+        部门: ["生产部"],
         开始日期: 100,
       },
     }],
@@ -245,6 +281,7 @@ test("resident callback writes only confirmed Base fields once and sends one str
   const cardJson = calls.cards[0].data.content;
   assert.match(cardJson, /\"initial_option\":\"再生\"/);
   assert.match(cardJson, /\"initial_options\":\[\"镇江\"\]/);
+  assert.match(cardJson, /\"initial_option\":\"生产部\"/);
 
   const event = {
     messageId: "om_card",
@@ -354,9 +391,9 @@ test("resident workflow recovers missing owner IDs from source mentions", async 
           description: "测试一下 maxhub",
           owner_open_id: "",
           owner_name: "段星岚",
-          group: "医疗",
-          bases: ["青州"],
-          department: "AIT部",
+          group: "",
+          bases: [],
+          department: "",
           reminder_frequency: "一周一次",
           duplicate_mode: "none",
           duplicate_note: "",
@@ -365,9 +402,9 @@ test("resident workflow recovers missing owner IDs from source mentions", async 
           description: "测试一下 youtube",
           owner_open_id: "",
           owner_name: "颜宇",
-          group: "医疗",
-          bases: ["青州"],
-          department: "AIT部",
+          group: "",
+          bases: [],
+          department: "",
           reminder_frequency: "一周一次",
           duplicate_mode: "none",
           duplicate_note: "",
@@ -388,6 +425,12 @@ test("resident workflow recovers missing owner IDs from source mentions", async 
   assert.match(card, /"initial_option":"ou_owner"/);
   assert.match(card, /"initial_option":"ou_yanyu"/);
   assert.match(card, /"value":"ou_yanyu"/);
+  assert.match(card, /"initial_option":"医疗"/);
+  assert.match(card, /"initial_options":\["医疗"\]/);
+  assert.match(card, /"initial_option":"再生"/);
+  assert.match(card, /"initial_options":\["镇江"\]/);
+  assert.match(card, /"initial_option":"AIT部"/);
+  assert.match(card, /"initial_option":"生产部"/);
 
   assert.equal(await handleTaskIntakeCardAction({
     event: {
