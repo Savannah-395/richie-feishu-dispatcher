@@ -117,7 +117,9 @@ test("task intake fetches Wiki-backed Docx blocks through the native bot client"
   assert.equal(calls[0][1].params.token, "A5aQwuZvViriiskJmUlccSV1nEe");
   assert.equal(calls.filter(([kind]) => kind === "blocks").length, 2);
   assert.equal(calls[2][1].params.user_id_type, "open_id");
+  assert.equal(calls[2][1].params.document_revision_id, -1);
   assert.equal(calls[3][1].params.page_token, "next-page");
+  assert.equal(calls[3][1].params.document_revision_id, -1);
   assert.match(result.context, /dispatcher_fetched_feishu_documents/);
   assert.match(result.context, /identity="bot"/);
   assert.match(result.context, /title="会议纪要"/);

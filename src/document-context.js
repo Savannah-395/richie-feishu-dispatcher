@@ -99,13 +99,13 @@ async function fetchDocumentInfo(client, documentId) {
   return response?.data?.document || {};
 }
 
-async function fetchAllDocumentBlocks(client, documentId, revisionId) {
+async function fetchAllDocumentBlocks(client, documentId) {
   const blocks = [];
   let pageToken = "";
   do {
     const params = {
       page_size: PAGE_SIZE,
-      document_revision_id: Number.isInteger(revisionId) ? revisionId : -1,
+      document_revision_id: -1,
       user_id_type: "open_id",
       ...(pageToken ? { page_token: pageToken } : {}),
     };
@@ -240,7 +240,7 @@ async function fetchDocument(url, client) {
     const resolved = await resolveDocxResource(client, url);
     const info = await fetchDocumentInfo(client, resolved.documentId);
     const revisionId = Number.isInteger(info.revision_id) ? info.revision_id : -1;
-    const blocks = await fetchAllDocumentBlocks(client, resolved.documentId, revisionId);
+    const blocks = await fetchAllDocumentBlocks(client, resolved.documentId);
     const content = renderDocumentBlocks(blocks);
     if (!content) {
       throw new Error("飞书文档正文为空");
