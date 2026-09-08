@@ -46,7 +46,7 @@ const channel = createLarkChannel({
   loggerLevel: LoggerLevel.info,
   policy: {
     requireMention: config.feishu.requireMentionToReply,
-    dmMode: "ignore",
+    dmMode: "disabled",
   },
   safety: {
     chatQueue: { enabled: false },
@@ -370,7 +370,10 @@ async function resolveRepositorySkillRoute(message, content) {
     );
   }
 
-  const mentionedSkill = skills.find((skill) => contentMentionsSkill(content, skill));
+  const mentionedSkill = skills.find((skill) => (
+    !isTaskIntakeRoute({ skillName: skill.name })
+    && contentMentionsSkill(content, skill)
+  ));
   if (mentionedSkill) {
     return {
       source: "message-skill-mention",
@@ -474,6 +477,10 @@ function buildCodexPrompt({ latestMessage, threadTranscript, skillRoute, message
 }
 
 function getIgnoreReason(message) {
+  if (message.chatType === "p2p") {
+    return "direct messages are disabled";
+  }
+
   if (!message.content?.trim() && !hasSupportedResourceType(message)) {
     return "empty content";
   }

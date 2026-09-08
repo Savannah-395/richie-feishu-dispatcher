@@ -81,6 +81,14 @@ test("independent topics in the same chat are not serialized by the SDK", async 
   assert.match(source, /safety:\s*\{\s*chatQueue:\s*\{\s*enabled:\s*false\s*\}/);
 });
 
+test("dispatcher disables direct messages with the SDK-supported policy value", async () => {
+  const source = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
+  assert.match(source, /dmMode:\s*"disabled"/);
+  assert.doesNotMatch(source, /dmMode:\s*"ignore"/);
+  assert.match(source, /message\.chatType === "p2p"/);
+  assert.match(source, /!isTaskIntakeRoute\(\{ skillName: skill\.name \}\)/);
+});
+
 test("a successful project-native card suppresses the dispatcher completion card", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "richie-native-reply-"));
   const markerPath = path.join(directory, "native-reply.json");
