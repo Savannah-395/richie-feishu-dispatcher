@@ -244,6 +244,10 @@ function verifyBaseSchema(fields, config) {
     }
     result[key] = field;
   }
+  const statusValue = configuredTaskStatus(config);
+  if (!allowedValues(result.status).has(statusValue)) {
+    throw new Error(`多维表格字段选项不匹配：${config.fields.status.name} 不包含“${statusValue}”`);
+  }
   return result;
 }
 
@@ -967,7 +971,16 @@ function baseV3Record(task, config) {
     [config.fields.base.name]: task.bases,
     [config.fields.department.name]: [task.department],
     [config.fields.reminder.name]: [task.reminder],
+    [config.fields.status.name]: [configuredTaskStatus(config)],
   };
+}
+
+function configuredTaskStatus(config) {
+  const value = asText(config.fields?.status?.value);
+  if (!value) {
+    throw new Error("任务录入配置缺少确认后的任务状态值");
+  }
+  return value;
 }
 
 function baseV3BatchCreatePath(config) {
@@ -991,7 +1004,8 @@ function recordMatchesTask(record, task, config) {
     && recordBases.length === taskBases.length
     && recordBases.every((base, index) => base === taskBases[index])
     && firstNonEmpty(fields[config.fields.department.name]) === task.department
-    && firstNonEmpty(fields[config.fields.reminder.name]) === task.reminder;
+    && firstNonEmpty(fields[config.fields.reminder.name]) === task.reminder
+    && firstNonEmpty(fields[config.fields.status.name]) === configuredTaskStatus(config);
 }
 
 function recoveryCutoff(pending) {
