@@ -143,9 +143,9 @@ PYTHONIOENCODING=utf-8
 
 `scripts/start-richie-background.ps1` 会在启动前执行 `chcp 65001` 并设置上述环境变量。
 
-任务录入消息包含飞书文档或 Wiki 链接时，dispatcher 会在启动 Codex 前直接执行
-`lark-cli docs +fetch --as bot --detail full`，以 Richie 机器人身份只读获取结构化正文和文档内责任人 `user-id`。
-因此运行机器必须能从 `PATH` 找到 `lark-cli`；如果可执行文件不在 `PATH`，用 `LARK_CLI_BIN` 配置其完整路径。
+任务录入消息包含飞书新版文档或 Wiki 链接时，dispatcher 会在启动 Codex 前复用已登录的
+飞书 SDK 机器人客户端，原生调用 Wiki 节点与 Docx 文档块接口，只读获取完整结构化正文和文档内责任人 `open_id`。
+运行机器无需额外安装 `lark-cli`；文档读取与消息收发使用同一套 `FEISHU_APP_ID`、`FEISHU_APP_SECRET` 和机器人权限。
 
 ## 启动
 

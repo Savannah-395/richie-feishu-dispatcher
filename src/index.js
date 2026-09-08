@@ -768,7 +768,9 @@ async function handleMessage(message) {
               : "auto-codex";
         let taskDocumentContext = "";
         if (isTaskIntakeRoute(skillRoute)) {
-          const documentContext = await loadTaskIntakeDocumentContext(messageContent);
+          const documentContext = await loadTaskIntakeDocumentContext(messageContent, {
+            client: channel.rawClient,
+          });
           if (documentContext.errors.length > 0) {
             await sendTaskIntakeError(
               channel,
