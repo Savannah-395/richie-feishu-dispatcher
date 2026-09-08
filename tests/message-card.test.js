@@ -105,3 +105,10 @@ test("dispatcher passes the native-reply marker path to Codex tasks", async () =
   assert.match(source, /NATIVE_REPLY_MARKER_ENV/);
   assert.match(source, /native-reply\.json/);
 });
+
+test("dispatcher never renders the internal task-intake protocol as a completion card", async () => {
+  const source = await readFile(new URL("../src/index.js", import.meta.url), "utf8");
+  assert.match(source, /parseTaskIntakeProtocol\(result\?\.finalMessage\)/);
+  assert.match(source, /Refused to render internal task-intake protocol/);
+  assert.match(source, /内部任务结果未进入确认流程/);
+});

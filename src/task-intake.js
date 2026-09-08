@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 
 import { DurableStateStore } from "./durable-state.js";
+import { buildStructuredMentions } from "./mention-utils.js";
 
 const PROTOCOL = "richie.task-intake.v1";
 const DEFAULT_MAX_CARD_BYTES = 28_000;
@@ -319,7 +320,7 @@ async function loadEmployeeDirectory(client, config, { force = false } = {}) {
 
 function stripAssignmentMentions(description, sourceMessage) {
   let result = asText(description);
-  for (const mention of sourceMessage?.mentions || []) {
+  for (const mention of buildStructuredMentions(sourceMessage)) {
     for (const token of [mention.key, mention.name ? `@${mention.name}` : ""]) {
       if (token) {
         result = result.split(token).join(" ");
@@ -330,9 +331,15 @@ function stripAssignmentMentions(description, sourceMessage) {
 }
 
 function normalizeTasks(protocol, message, config, records) {
+  const sourceMentions = buildStructuredMentions(message, config.bot_open_id);
   const rawTasks = Array.isArray(protocol.tasks) ? protocol.tasks : [];
   return rawTasks.map((candidate) => {
-    const ownerOpenId = asText(candidateValue(candidate, "owner_open_id", "ownerOpenId"));
+    const ownerName = asText(candidateValue(candidate, "owner_name", "ownerName"));
+    const suppliedOwnerOpenId = asText(candidateValue(candidate, "owner_open_id", "ownerOpenId"));
+    const ownerIdsByName = uniqueStrings(sourceMentions
+      .filter((mention) => !mention.is_bot && mention.open_id && mention.name === ownerName)
+      .map((mention) => mention.open_id));
+    const ownerOpenId = suppliedOwnerOpenId || (ownerIdsByName.length === 1 ? ownerIdsByName[0] : "");
     const historical = latestOwnerDefaults(records, ownerOpenId, config);
     return {
       description: stripAssignmentMentions(asText(candidateValue(
@@ -342,7 +349,7 @@ function normalizeTasks(protocol, message, config, records) {
         "task",
       )), message),
       ownerOpenId,
-      ownerName: asText(candidateValue(candidate, "owner_name", "ownerName")),
+      ownerName,
       group: historical.group || asText(candidateValue(candidate, "group")),
       bases: historical.bases.length > 0
         ? historical.bases
@@ -353,6 +360,23 @@ function normalizeTasks(protocol, message, config, records) {
       duplicateNote: asText(candidateValue(candidate, "duplicate_note", "duplicateNote")),
     };
   }).filter((task) => task.description);
+}
+
+function sourceMentionOwners(message, config) {
+  return buildStructuredMentions(message, config.bot_open_id)
+    .filter((mention) => !mention.is_bot && mention.open_id)
+    .map((mention) => ({ openId: mention.open_id, name: mention.name || mention.open_id }));
+}
+
+function mergeDirectoryUsers(directory, additionalUsers) {
+  const usersById = new Map(directory.map((user) => [user.openId, user]));
+  for (const user of additionalUsers || []) {
+    const openId = asText(user?.openId || user?.open_id);
+    if (openId && !usersById.has(openId)) {
+      usersById.set(openId, { openId, name: asText(user?.name) || openId });
+    }
+  }
+  return [...usersById.values()].sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
 }
 
 function findExactDuplicates(tasks, records, config) {
@@ -618,11 +642,13 @@ export async function handleTaskIntakeResult({ route, message, result, channel, 
   }
 
   const client = channel.rawClient;
-  const [directory, fields, records] = await Promise.all([
+  const [loadedDirectory, fields, records] = await Promise.all([
     loadEmployeeDirectory(client, config),
     listBaseFields(client, config),
     listBaseRecords(client, config),
   ]);
+  const trustedMentionOwners = sourceMentionOwners(message, config);
+  const directory = mergeDirectoryUsers(loadedDirectory, trustedMentionOwners);
   const schema = verifyBaseSchema(fields, config);
   const directoryIds = new Set(directory.map((user) => user.openId));
   let tasks = normalizeTasks(protocol, message, config, records);
@@ -662,6 +688,7 @@ export async function handleTaskIntakeResult({ route, message, result, channel, 
       createdAt: new Date().toISOString(),
       expiresAt: new Date(Date.now() + (config.pending_ttl_hours || 72) * 60 * 60 * 1000).toISOString(),
       tasks: group.tasks,
+      sourceMentionOwners: trustedMentionOwners,
       part: offset + 1,
       partCount: groups.length,
     });
@@ -812,11 +839,12 @@ export async function handleTaskIntakeCardAction({ event, route, channel, stateD
 
     try {
       const client = channel.rawClient;
-      const [directory, fields, records] = await Promise.all([
+      const [loadedDirectory, fields, records] = await Promise.all([
         loadEmployeeDirectory(client, config, { force: true }),
         listBaseFields(client, config),
         listBaseRecords(client, config),
       ]);
+      const directory = mergeDirectoryUsers(loadedDirectory, pending.sourceMentionOwners);
       const schema = verifyBaseSchema(fields, config);
       const submitted = readSubmittedTasks(form, pending, directory, schema);
       const existingDescriptions = new Set(records

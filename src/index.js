@@ -5,6 +5,7 @@ import { config } from "./config.js";
 import { downloadMessageAttachments, formatAttachmentSummary, shouldUseAttachmentContext } from "./attachment-manager.js";
 import { extractCodexPrompt, isCodexCommand, runCodexTask } from "./codex-runner.js";
 import { buildMessageCards, extractSourceSection } from "./message-card.js";
+import { buildStructuredMentions } from "./mention-utils.js";
 import { shouldSuppressDispatcherReply } from "./native-reply.js";
 import { createOpenAIClient, generateThreadReply } from "./openai-client.js";
 import {
@@ -18,6 +19,7 @@ import {
   handleTaskIntakeCardAction,
   handleTaskIntakeResult,
   isTaskIntakeRoute,
+  parseTaskIntakeProtocol,
   sendTaskIntakeError,
   TASK_INTAKE_OUTPUT_SCHEMA,
 } from "./task-intake.js";
@@ -437,11 +439,7 @@ function formatSkillRoutePrompt(skillRoute) {
 }
 
 function buildCodexPrompt({ latestMessage, threadTranscript, skillRoute, message, topicId }) {
-  const structuredMentions = (message.mentions || []).map((mention) => ({
-    key: mention.key || "",
-    name: mention.name || "",
-    open_id: mention.openId || mention.open_id || mention.id?.open_id || "",
-  }));
+  const structuredMentions = buildStructuredMentions(message, channel.botIdentity?.openId || "");
   const deliveryInstructions = isTaskIntakeRoute(skillRoute)
     ? [
         "- Return only the richie.task-intake.v1 JSON selected by the routed Skill. The resident dispatcher owns all Feishu delivery and Base access.",
@@ -541,6 +539,17 @@ async function markMessageDone(message, ackReactionId) {
 }
 
 async function sendCodexResult(message, result, { skillRoute, executionKind } = {}) {
+  if (parseTaskIntakeProtocol(result?.finalMessage)) {
+    console.error(`Refused to render internal task-intake protocol for ${message.messageId}`);
+    await sendTaskIntakeError(
+      channel,
+      message.chatId,
+      "内部任务结果未进入确认流程，请重启 Richie 至最新版本后重新发送任务。",
+      message.messageId,
+    );
+    return { suppressed: true, protocolGuard: true };
+  }
+
   if (shouldSuppressDispatcherReply(result)) {
     console.log(
       `Skipped dispatcher completion card because ${result.nativeReply.sender} already sent `
