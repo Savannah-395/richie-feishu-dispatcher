@@ -344,6 +344,10 @@ test("resident callback writes only confirmed Base fields once and sends one str
     stateDir: path.join(temporary, "state"),
   }), true);
   assert.equal(calls.baseWrites.length, 1);
+  assert.match(
+    calls.baseWrites[0].params.client_token,
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+  );
   assert.deepEqual(Object.keys(calls.baseWrites[0].data.records[0].fields).sort(), [
     "任务负责人",
     "任务描述",

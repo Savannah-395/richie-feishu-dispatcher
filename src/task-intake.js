@@ -121,6 +121,20 @@ function hashToken(...parts) {
   return createHash("sha256").update(parts.join(":"), "utf8").digest("hex").slice(0, 32);
 }
 
+function deterministicUuidV4(...parts) {
+  const bytes = createHash("sha256").update(parts.join(":"), "utf8").digest().subarray(0, 16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    hex.slice(12, 16),
+    hex.slice(16, 20),
+    hex.slice(20, 32),
+  ].join("-");
+}
+
 function optionItems(field) {
   return (field?.property?.options || [])
     .map((option) => ({ text: asText(option.name), value: asText(option.name) }))
@@ -1063,7 +1077,7 @@ export async function handleTaskIntakeCardAction({ event, route, channel, stateD
       const response = await callApi("写入任务管理表", () => client.bitable.v1.appTableRecord.batchCreate({
         params: {
           user_id_type: "open_id",
-          client_token: hashToken("task-intake", event.messageId),
+          client_token: deterministicUuidV4("task-intake", event.messageId),
         },
         path: { app_token: config.base_token, table_id: config.table_id },
         data: { records: toCreate.map((task) => baseRecord(task, config)) },
