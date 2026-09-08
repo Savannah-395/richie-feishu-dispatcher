@@ -139,6 +139,13 @@ function makeClient(calls) {
     im: {
       v1: {
         message: {
+          patch: async (payload) => {
+            (calls.cardUpdates ||= []).push(payload);
+            if (calls.cardUpdateError) {
+              throw calls.cardUpdateError;
+            }
+            return { code: 0, data: {} };
+          },
           create: async (payload) => {
             if (calls.messageError) {
               throw calls.messageError;
@@ -196,6 +203,7 @@ test("Feishu HTTP errors keep the API code, message and log id", async () => {
   };
   const calls = {
     cards: [],
+    cardUpdates: [],
     baseWrites: [],
     textMessages: [],
     records: [],
@@ -414,6 +422,16 @@ test("resident callback writes ongoing status and confirmation-day reminder date
     Date.parse("2026-09-08T00:00:00+08:00"),
   );
   assert.equal(calls.textMessages.length, 0);
+  assert.equal(calls.cardUpdates.length, 2, "failed write must lock and then restore the confirmation card");
+  const failedProcessingCard = JSON.parse(calls.cardUpdates[0].data.content);
+  const failedProcessingButton = failedProcessingCard.body.elements[0].elements
+    .flatMap((element) => element.columns || [])
+    .flatMap((item) => item.elements || [])
+    .find((element) => element.name === "confirm_write");
+  assert.equal(failedProcessingButton.disabled, true);
+  assert.equal(failedProcessingButton.type, "default");
+  assert.equal(failedProcessingButton.text.content, "写入中…");
+  assert.doesNotMatch(calls.cardUpdates[1].data.content, /"disabled":true/);
 
   calls.baseError = undefined;
   calls.records = [{
@@ -447,6 +465,16 @@ test("resident callback writes ongoing status and confirmation-day reminder date
   assert.equal(success.header.title.content, "任务录入成功");
   assert.match(calls.cards[1].data.content, /完成 Maxhub 功能测试并反馈结果/);
   assert.match(calls.cards[1].data.content, /<at id=ou_owner><\/at>/);
+  assert.equal(calls.cardUpdates.length, 4);
+  const completedCard = JSON.parse(calls.cardUpdates[3].data.content);
+  const completedButton = completedCard.body.elements[0].elements
+    .flatMap((element) => element.columns || [])
+    .flatMap((item) => item.elements || [])
+    .find((element) => element.name === "confirm_write");
+  assert.equal(completedButton.disabled, true);
+  assert.equal(completedButton.type, "default");
+  assert.equal(completedButton.text.content, "已写入");
+  assert.equal(completedButton.disabled_tips.content, "任务已写入，不可重复提交");
 
   await handleTaskIntakeCardAction({
     event,
@@ -456,6 +484,7 @@ test("resident callback writes ongoing status and confirmation-day reminder date
   });
   assert.equal(calls.baseWrites.length, 1, "duplicate callback must not write twice");
   assert.equal(calls.cards.length, 2, "duplicate callback must not send twice");
+  assert.equal(calls.cardUpdates.length, 4, "duplicate callback must not update the locked card twice");
   assert.equal(calls.textMessages.length, 0);
 });
 

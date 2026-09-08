@@ -849,6 +849,52 @@ async function sendInteractiveCard(channel, chatId, card, uuid, operation = "发
   return response.data.message_id;
 }
 
+function confirmButtonCard(card, state) {
+  const buttonStates = {
+    processing: {
+      text: "写入中…",
+      disabledTips: "正在写入任务管理表，请勿重复提交",
+    },
+    completed: {
+      text: "已写入",
+      disabledTips: "任务已写入，不可重复提交",
+    },
+  };
+  const buttonState = buttonStates[state];
+  if (!buttonState) {
+    return card;
+  }
+  const visit = (value) => {
+    if (Array.isArray(value)) {
+      return value.map(visit);
+    }
+    if (!value || typeof value !== "object") {
+      return value;
+    }
+    const updated = Object.fromEntries(Object.entries(value).map(([key, item]) => [key, visit(item)]));
+    if (updated.tag === "button" && updated.name === "confirm_write") {
+      updated.text = cardText(buttonState.text);
+      updated.type = "default";
+      updated.disabled = true;
+      updated.disabled_tips = cardText(buttonState.disabledTips);
+    }
+    return updated;
+  };
+  return visit(card);
+}
+
+async function updateConfirmCard(client, messageId, card, state) {
+  if (!card || typeof client?.im?.v1?.message?.patch !== "function") {
+    throw new Error("当前确认卡不支持安全锁定，请重新发送任务后再确认");
+  }
+  await callApi(`更新确认卡为${state === "completed" ? "已写入" : "写入中"}状态`, () => (
+    client.im.v1.message.patch({
+      path: { message_id: messageId },
+      data: { content: JSON.stringify(confirmButtonCard(card, state)) },
+    })
+  ));
+}
+
 function createTaskIntakeStore(stateDir) {
   return new DurableStateStore(path.join(stateDir, "task-intake"));
 }
@@ -944,6 +990,7 @@ export async function handleTaskIntakeResult({
       createdAt: new Date().toISOString(),
       expiresAt: new Date(Date.now() + (config.pending_ttl_hours || 72) * 60 * 60 * 1000).toISOString(),
       tasks: group.tasks,
+      card: group.card,
       sourceMentionOwners: mentionProfiles,
       part: offset + 1,
       partCount: groups.length,
@@ -1216,6 +1263,7 @@ export async function handleTaskIntakeCardAction({ event, route, channel, stateD
 
     try {
       const client = channel.rawClient;
+      await updateConfirmCard(client, event.messageId, pending.card, "processing");
       const [loadedDirectory, fields, records] = await Promise.all([
         loadEmployeeDirectory(client, config, { force: true }),
         listBaseFields(client, config),
@@ -1284,6 +1332,7 @@ export async function handleTaskIntakeCardAction({ event, route, channel, stateD
         taskMessageUuid("success", event.messageId),
         "发送任务成功卡片",
       );
+      await updateConfirmCard(client, event.messageId, pending.card, "completed");
       await store.write(key, {
         ...pending,
         status: "completed",
@@ -1300,6 +1349,16 @@ export async function handleTaskIntakeCardAction({ event, route, channel, stateD
         lastErrorAt: new Date().toISOString(),
         lastError: `${error?.message || error}`.slice(0, 1000),
       });
+      if (pending.card && typeof channel.rawClient?.im?.v1?.message?.patch === "function") {
+        try {
+          await callApi("恢复可提交确认卡", () => channel.rawClient.im.v1.message.patch({
+            path: { message_id: event.messageId },
+            data: { content: JSON.stringify(pending.card) },
+          }));
+        } catch (restoreError) {
+          console.warn(`Unable to restore task confirmation card ${event.messageId}`, restoreError);
+        }
+      }
       throw error;
     }
   });
