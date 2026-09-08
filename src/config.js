@@ -70,6 +70,7 @@ export const config = {
     doneEmojiType: (process.env.BOT_DONE_EMOJI_TYPE || "DONE").trim(),
     maxThreadMessages: readNumber("BOT_MAX_THREAD_MESSAGES", 20),
     maxInputChars: readNumber("BOT_MAX_INPUT_CHARS", 12000),
+    stateDir: path.resolve(process.env.RICHIE_STATE_DIR?.trim() || path.join(process.cwd(), "logs", "state")),
   },
   audit: {
     enabled: readBoolean("RICHIE_AUDIT_ENABLED", Boolean(process.env.RICHIE_AUDIT_CHAT_ID?.trim())),
@@ -96,6 +97,7 @@ export const config = {
   },
   sync: {
     enabled: readBoolean("RICHIE_GIT_SYNC_ENABLED", true),
+    dispatcherEnabled: readBoolean("RICHIE_GIT_SYNC_DISPATCHER", false),
     intervalMs: readNumber("RICHIE_GIT_SYNC_INTERVAL_SECONDS", 600) * 1000,
     remote: (process.env.RICHIE_GIT_REMOTE || "origin").trim(),
     branch: process.env.RICHIE_GIT_BRANCH?.trim() || "",

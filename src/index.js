@@ -7,7 +7,20 @@ import { extractCodexPrompt, isCodexCommand, runCodexTask } from "./codex-runner
 import { buildMessageCards, extractSourceSection } from "./message-card.js";
 import { shouldSuppressDispatcherReply } from "./native-reply.js";
 import { createOpenAIClient, generateThreadReply } from "./openai-client.js";
-import { listRepositorySkillRoutes, listRepositorySkills, startGitSync } from "./skill-sync.js";
+import {
+  isRouteActionAllowed,
+  listRepositorySkillRoutes,
+  listRepositorySkills,
+  startGitSync,
+} from "./skill-sync.js";
+import { DurableStateStore } from "./durable-state.js";
+import {
+  handleTaskIntakeCardAction,
+  handleTaskIntakeResult,
+  isTaskIntakeRoute,
+  sendTaskIntakeError,
+  TASK_INTAKE_OUTPUT_SCHEMA,
+} from "./task-intake.js";
 import { ThreadQueue } from "./thread-queue.js";
 import { ThreadStore } from "./thread-store.js";
 
@@ -36,7 +49,7 @@ const channel = createLarkChannel({
   safety: {
     chatQueue: { enabled: false },
   },
-  includeRawInMessage: false,
+  includeRawEvent: true,
 });
 
 const openai = createOpenAIClient(config.openai);
@@ -46,6 +59,7 @@ const store = new ThreadStore({
   maxInputChars: config.bot.maxInputChars,
 });
 let syncController;
+const messageLedger = new DurableStateStore(path.join(config.bot.stateDir, "messages"));
 
 function getTopicId(message) {
   return message.threadId || message.rootId || message.messageId;
@@ -327,7 +341,11 @@ function contentMentionsSkill(content, skill) {
 
 async function resolveRepositorySkillRoute(message, content) {
   const { skills, routes } = await listRepositorySkillRoutes(config.sync);
-  const chatRoutes = routes.filter((route) => route.chatIds.includes(message.chatId));
+  const chatRoutes = routes.filter((route) => (
+    route.chatIds.includes(message.chatId)
+    && isRouteActionAllowed(route, "invoke", { chatId: message.chatId })
+    && (!isTaskIntakeRoute(route) || isRouteActionAllowed(route, "read", { chatId: message.chatId }))
+  ));
 
   if (chatRoutes.length === 1) {
     return { ...chatRoutes[0], reason: `chat ${message.chatId} is mapped to this project skill` };
@@ -344,11 +362,10 @@ async function resolveRepositorySkillRoute(message, content) {
       return { ...mentionedRoute, reason: `chat ${message.chatId} and message text matched this skill` };
     }
 
-    return {
-      ...chatRoutes[0],
-      reason: `chat ${message.chatId} has ${chatRoutes.length} skill routes; routing to the first configured route`,
-      ambiguousRoutes: chatRoutes.map((route) => route.skillKey || route.projectName),
-    };
+    throw new Error(
+      `群 ${message.chatId} 同时配置了多个 Skill，且消息未明确指定：`
+      + chatRoutes.map((route) => route.skillKey || route.projectName).join(", "),
+    );
   }
 
   const mentionedSkill = skills.find((skill) => contentMentionsSkill(content, skill));
@@ -405,10 +422,37 @@ function formatSkillRoutePrompt(skillRoute) {
     "- If the user request is incomplete, ask a project-specific clarification instead of falling back to ordinary chat.",
   );
 
+  if (isTaskIntakeRoute(skillRoute)) {
+    lines.push(
+      "- This workflow is dispatcher-owned. Do not call lark-cli, do not send a Feishu message/card, do not write Base records, and do not wait for card callbacks.",
+      "- Only extract/classify tasks and return exactly one JSON object using protocol richie.task-intake.v1.",
+      "- Valid candidate result: {\"protocol\":\"richie.task-intake.v1\",\"status\":\"candidates\",\"message\":\"\",\"tasks\":[{\"description\":\"task text without assignment/trigger @mentions\",\"owner_open_id\":\"ou_xxx\",\"owner_name\":\"name\",\"group\":\"\",\"bases\":[],\"department\":\"\",\"reminder_frequency\":\"一周一次\",\"duplicate_mode\":\"none\",\"duplicate_note\":\"\"}]}",
+      "- No-task result: {\"protocol\":\"richie.task-intake.v1\",\"status\":\"unrecognized\",\"message\":\"未识别到明确待办，请发送具体任务内容并 @责任人。\",\"tasks\":[]}.",
+      "- Use the structured Feishu mentions in the trusted context/message payload when available. For each task, only the first real user mention is the default owner; later mentions and Richie are not owners.",
+      "- Output JSON only, without Markdown fences or commentary. The resident dispatcher builds the editable card, resolves Base defaults, receives confirmation, writes Base, and sends the success text.",
+    );
+  }
+
   return lines;
 }
 
 function buildCodexPrompt({ latestMessage, threadTranscript, skillRoute, message, topicId }) {
+  const structuredMentions = (message.mentions || []).map((mention) => ({
+    key: mention.key || "",
+    name: mention.name || "",
+    open_id: mention.openId || mention.open_id || mention.id?.open_id || "",
+  }));
+  const deliveryInstructions = isTaskIntakeRoute(skillRoute)
+    ? [
+        "- Return only the richie.task-intake.v1 JSON selected by the routed Skill. The resident dispatcher owns all Feishu delivery and Base access.",
+      ]
+    : [
+        "- source_message_id is the valid reply target. If a routed skill explicitly sends its own interactive card, reply to this ID with reply_in_thread=true.",
+        "- The dispatcher always renders your final response as a Feishu Card 2.0 message in this same topic. Do not claim that an om_xxx message ID is missing, and do not ask the user to move the reply manually.",
+        "- Do not send a duplicate plain-text or post message. Return concise Markdown for the dispatcher unless the routed skill deliberately returns a complete Card 2.0 JSON payload.",
+        "- The dispatcher does not send raw file or image messages. A routed skill must upload formal deliverables to Feishu Drive and expose the cloud URL inside a Card 2.0 delivery reply. Keep local-only artifacts out of the user-visible reply.",
+        "- When external data or a project workflow was used, end the final Markdown with a separate `来源与口径：...` block. Include the API/source, market or site, snapshot time where relevant, ranking basis, and known limitations. The dispatcher moves this block into the card's grey source section.",
+      ];
   return [
     "Only use the current Feishu topic context below. Read any local file paths listed in the context when they are relevant.",
     ...formatSkillRoutePrompt(skillRoute),
@@ -419,12 +463,9 @@ function buildCodexPrompt({ latestMessage, threadTranscript, skillRoute, message
     `- topic_id: ${topicId}`,
     `- thread_id: ${message.threadId || "(not supplied by event)"}`,
     `- root_id: ${message.rootId || "(not supplied by event)"}`,
-    "- source_message_id is the valid reply target. If a routed skill explicitly sends its own interactive card, reply to this ID with reply_in_thread=true.",
-    "- The dispatcher always renders your final response as a Feishu Card 2.0 message in this same topic. Do not claim that an om_xxx message ID is missing, and do not ask the user to move the reply manually.",
-    "- Do not send a duplicate plain-text or post message. Return concise Markdown for the dispatcher unless the routed skill deliberately returns a complete Card 2.0 JSON payload.",
-    "- The dispatcher does not send raw file or image messages. A routed skill must upload formal deliverables to Feishu Drive and expose the cloud URL inside a Card 2.0 delivery reply. Keep local-only artifacts out of the user-visible reply.",
+    `- structured_mentions: ${JSON.stringify(structuredMentions)}`,
+    ...deliveryInstructions,
     "- Before any paid API call or data collection, obey the routed skill's intake and confirmation gates. If the product scope or match policy is ambiguous, ask the user first and stop; do not search speculatively.",
-    "- When external data or a project workflow was used, end the final Markdown with a separate `来源与口径：...` block. Include the API/source, market or site, snapshot time where relevant, ranking basis, and known limitations. The dispatcher moves this block into the card's grey source section.",
     "",
     "Current Feishu topic context:",
     threadTranscript || "(no prior context)",
@@ -578,15 +619,33 @@ async function handleMessage(message) {
 
   const topicId = getTopicId(message);
   let initialSkillRoute;
+  let routeResolutionError;
   if (config.codex.enabled && message.chatId) {
     try {
       initialSkillRoute = await resolveRepositorySkillRoute(message, message.content || "");
     } catch (error) {
       console.warn(`Failed to resolve repository skill route for message ${message.messageId}`, error);
+      routeResolutionError = error;
     }
   }
 
+  if (routeResolutionError) {
+    await sendCardMessage(message.chatId, routeResolutionError.message, {
+      title: "Richie · 路由冲突",
+      tone: "warning",
+      input: message.content,
+      source: "Richie dispatcher 路由配置；未启动任何 Skill。",
+      replyTo: message.messageId,
+      replyInThread: true,
+    });
+    return;
+  }
+
   const topicActive = store.isActive(topicId);
+  if (initialSkillRoute?.requireMention === true && !message.mentionedBot) {
+    console.log(`Ignored message ${message.messageId}: routed workflow requires an explicit bot mention`);
+    return;
+  }
   const shouldReply = Boolean(initialSkillRoute)
     || (config.feishu.requireMentionToReply
       ? message.mentionedBot
@@ -705,6 +764,9 @@ async function handleMessage(message) {
           : {
               attachments: attachmentResult.attachments,
             };
+        if (isTaskIntakeRoute(skillRoute)) {
+          codexOptions.outputSchema = TASK_INTAKE_OUTPUT_SCHEMA;
+        }
         codexOptions.onStart = async (task) => {
           auditStart = await sendAuditStart({
             message,
@@ -728,7 +790,25 @@ async function handleMessage(message) {
             message,
             topicId,
           }), codexOptions);
-          await sendCodexResult(message, result, { skillRoute, executionKind });
+          let workflowHandled = false;
+          if (isTaskIntakeRoute(skillRoute)) {
+            try {
+              workflowHandled = await handleTaskIntakeResult({
+                route: skillRoute,
+                message,
+                result,
+                channel,
+                stateDir: config.bot.stateDir,
+              });
+            } catch (error) {
+              console.error(`Task-intake result failed for ${message.messageId}`, error);
+              await sendTaskIntakeError(channel, message.chatId, error.message, message.messageId);
+              workflowHandled = true;
+            }
+          }
+          if (!workflowHandled) {
+            await sendCodexResult(message, result, { skillRoute, executionKind });
+          }
           await sendAuditFinish(auditStart, {
             message,
             skillRoute,
@@ -833,7 +913,7 @@ async function handleMessage(message) {
 
 channel.on("message", async (message) => {
   try {
-    await handleMessage(message);
+    await messageLedger.runOnce(`message:${message.messageId}`, () => handleMessage(message));
   } catch (error) {
     console.error("Failed to process message", error);
 
@@ -852,6 +932,39 @@ channel.on("message", async (message) => {
   }
 });
 
+channel.on("cardAction", async (event) => {
+  try {
+    const { routes } = await listRepositorySkillRoutes(config.sync);
+    const taskRoutes = routes.filter((route) => (
+      route.chatIds.includes(event.chatId)
+      && isTaskIntakeRoute(route)
+      && isRouteActionAllowed(route, "confirm", { chatId: event.chatId })
+      && isRouteActionAllowed(route, "write", { chatId: event.chatId })
+    ));
+    if (taskRoutes.length !== 1) {
+      if (taskRoutes.length > 1) {
+        console.error(`Multiple task-intake routes configured for card action in ${event.chatId}`);
+      }
+      return;
+    }
+    await handleTaskIntakeCardAction({
+      event,
+      route: taskRoutes[0],
+      channel,
+      stateDir: config.bot.stateDir,
+    });
+  } catch (error) {
+    console.error("Failed to process task-intake card action", error);
+    if (event.chatId) {
+      try {
+        await sendTaskIntakeError(channel, event.chatId, error.message, event.messageId);
+      } catch (sendError) {
+        console.error("Failed to send task-intake error", sendError);
+      }
+    }
+  }
+});
+
 channel.on("reject", (event) => {
   console.warn("Message rejected by policy", event);
 });
@@ -862,6 +975,7 @@ channel.on("error", (error) => {
 
 async function main() {
   syncController = startGitSync(config.sync);
+  await syncController.ready;
   await channel.connect();
   console.log(`Feishu bot connected as ${channel.botIdentity?.name ?? "unknown-bot"}; richie sync is ${config.sync.enabled ? "enabled" : "disabled"}`);
 }

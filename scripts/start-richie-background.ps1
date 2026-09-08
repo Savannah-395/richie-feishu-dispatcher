@@ -1,5 +1,6 @@
 param(
-  [switch]$Restart
+  [switch]$Restart,
+  [switch]$SkipSync
 )
 
 $ErrorActionPreference = "Stop"
@@ -25,12 +26,44 @@ $OutputEncoding = $Utf8NoBom
 $env:PYTHONUTF8 = "1"
 $env:PYTHONIOENCODING = "utf-8"
 
-if ($Restart) {
+$Existing = @(
   Get-CimInstance Win32_Process -Filter "name = 'node.exe'" |
-    Where-Object { $_.CommandLine -like "*$Entry*" } |
-    ForEach-Object {
-      Stop-Process -Id $_.ProcessId -Force
+    Where-Object { $_.CommandLine -like "*$Entry*" }
+)
+
+if ($Existing.Count -gt 0 -and -not $Restart) {
+  Write-Host "richie bot is already running. pid=$($Existing[0].ProcessId)"
+  Write-Host "Use -Restart to deploy and restart without creating a duplicate process."
+  exit 0
+}
+
+if (-not $SkipSync) {
+  $GitStatus = & git -C $ProjectRoot status --porcelain
+  if ($LASTEXITCODE -ne 0) {
+    throw "Unable to inspect dispatcher git status."
+  }
+  if ($GitStatus) {
+    throw "Dispatcher working tree is dirty; refusing to pull and launch an ambiguous version."
+  }
+
+  $Before = (& git -C $ProjectRoot rev-parse HEAD).Trim()
+  & git -C $ProjectRoot pull --ff-only
+  if ($LASTEXITCODE -ne 0) {
+    throw "Dispatcher git pull failed; existing process was left running."
+  }
+  $After = (& git -C $ProjectRoot rev-parse HEAD).Trim()
+  if ($Before -ne $After -or -not (Test-Path (Join-Path $ProjectRoot "node_modules"))) {
+    & npm --prefix $ProjectRoot ci
+    if ($LASTEXITCODE -ne 0) {
+      throw "npm ci failed; existing process was left running."
     }
+  }
+}
+
+if ($Restart) {
+  $Existing | ForEach-Object {
+    Stop-Process -Id $_.ProcessId -Force
+  }
 }
 
 $Node = (Get-Command node).Source

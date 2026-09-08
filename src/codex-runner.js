@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir, readdir, readFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -180,12 +180,16 @@ export async function runCodexTask(config, userPrompt, options = {}) {
   const artifactsDir = path.join(runDir, "artifacts");
   const finalMessagePath = path.join(runDir, "final.md");
   const nativeReplyMarkerPath = path.join(runDir, "native-reply.json");
+  const outputSchemaPath = path.join(runDir, "output-schema.json");
   const workingRoot = options.workingRoot || projectRoot;
   const sandbox = options.sandbox || config.sandbox;
   const fullAccess = sandbox === "danger-full-access";
   const attachments = Array.isArray(options.attachments) ? options.attachments : [];
 
   await mkdir(artifactsDir, { recursive: true });
+  if (options.outputSchema) {
+    await writeFile(outputSchemaPath, JSON.stringify(options.outputSchema, null, 2), "utf8");
+  }
 
   const skillInstructions = await buildSkillInstructions(config);
   const prompt = buildPrompt({
@@ -207,9 +211,15 @@ export async function runCodexTask(config, userPrompt, options = {}) {
     workingRoot,
     "--sandbox",
     sandbox,
+    "--add-dir",
+    runDir,
     "--output-last-message",
     finalMessagePath,
   ];
+
+  if (options.outputSchema) {
+    args.push("--output-schema", outputSchemaPath);
+  }
 
   if (config.model) {
     args.push("--model", config.model);

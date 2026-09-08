@@ -222,6 +222,7 @@ function findConfiguredSkill(projectSkills, routeConfig) {
 
 function buildSkillRoute({ project, skill, chatIds, configPath, routeConfig = {}, source }) {
   const configuredWorkingRoot = routeConfig.working_root || routeConfig.workingRoot || "";
+  const configuredWorkflowPath = routeConfig.workflow_config || routeConfig.workflowConfig || "";
   const workingRoot = configuredWorkingRoot
     ? path.resolve(path.isAbsolute(configuredWorkingRoot) ? configuredWorkingRoot : path.join(project.path, configuredWorkingRoot))
     : "";
@@ -230,6 +231,15 @@ function buildSkillRoute({ project, skill, chatIds, configPath, routeConfig = {}
     source,
     chatIds,
     sandbox: routeConfig.sandbox || routeConfig.codex_sandbox || routeConfig.codexSandbox || "",
+    requireMention: routeConfig.require_mention ?? routeConfig.requireMention,
+    allowAllChatMembers: routeConfig.allow_all_chat_members ?? routeConfig.allowAllChatMembers,
+    authorizedActions: normalizeStringArray(routeConfig.authorized_actions || routeConfig.authorizedActions),
+    workflow: routeConfig.workflow || "",
+    workflowConfigPath: configuredWorkflowPath
+      ? path.resolve(path.isAbsolute(configuredWorkflowPath)
+        ? configuredWorkflowPath
+        : path.join(project.path, configuredWorkflowPath))
+      : "",
     workingRoot,
     projectName: project.name,
     projectTitle: project.title,
@@ -682,8 +692,19 @@ export async function listRepositorySkillRoutes(syncConfig) {
     if (existing) {
       existing.chatIds = [...new Set([...existing.chatIds, ...chatIds])];
       existing.source = [...new Set([...existing.source.split(","), route.source].map((item) => item.trim()).filter(Boolean))].join(",");
-      if (!existing.configPath && route.configPath) {
-        existing.configPath = route.configPath;
+      for (const key of ["configPath", "sandbox", "workingRoot", "workflow", "workflowConfigPath"]) {
+        if (route[key]) {
+          existing[key] = route[key];
+        }
+      }
+      if (typeof route.requireMention === "boolean") {
+        existing.requireMention = route.requireMention;
+      }
+      if (typeof route.allowAllChatMembers === "boolean") {
+        existing.allowAllChatMembers = route.allowAllChatMembers;
+      }
+      if (route.authorizedActions?.length > 0) {
+        existing.authorizedActions = route.authorizedActions;
       }
       return;
     }
@@ -773,6 +794,16 @@ export async function listRepositorySkillRoutes(syncConfig) {
   }
 
   return { projectRoots, projects, skills, routes };
+}
+
+export function isRouteActionAllowed(route, action, { chatId } = {}) {
+  if (!route || (chatId && !route.chatIds?.includes(chatId))) {
+    return false;
+  }
+  if (!route.authorizedActions?.length) {
+    return true;
+  }
+  return route.allowAllChatMembers === true && route.authorizedActions.includes(action);
 }
 
 async function pullLatest(syncConfig) {
@@ -925,7 +956,9 @@ async function installCodexSkills(syncConfig) {
 export async function runSyncOnce(syncConfig, reason = "manual") {
   console.log(`[richie-sync] start (${reason})`);
 
-  const pull = await pullLatest(syncConfig);
+  const pull = syncConfig.dispatcherEnabled
+    ? await pullLatest(syncConfig)
+    : { skipped: true, message: "dispatcher self-update disabled; restart through the launcher to deploy code" };
   if (pull.skipped) {
     console.log(`[richie-sync] dispatcher git pull skipped: ${pull.message}`);
   } else if (pull.ok) {
@@ -976,7 +1009,7 @@ export async function runSyncOnce(syncConfig, reason = "manual") {
 export function startGitSync(syncConfig) {
   if (!syncConfig.enabled) {
     console.log("[richie-sync] disabled");
-    return { stop() {} };
+    return { ready: Promise.resolve(), stop() {} };
   }
 
   let inFlight = false;
@@ -995,7 +1028,7 @@ export function startGitSync(syncConfig) {
     }
   };
 
-  void run("startup");
+  const ready = run("startup");
   const timer = setInterval(() => {
     void run("interval");
   }, syncConfig.intervalMs);
@@ -1003,6 +1036,7 @@ export function startGitSync(syncConfig) {
   console.log(`[richie-sync] scheduled every ${Math.round(syncConfig.intervalMs / 1000)} seconds`);
 
   return {
+    ready,
     stop() {
       stopped = true;
       clearInterval(timer);

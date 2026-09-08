@@ -33,13 +33,14 @@ workspace/
         SKILL.md
 ```
 
-richie 每 10 分钟会：
+richie 启动后会先完成一次项目同步，此后每 10 分钟会：
 
-1. `git pull --ff-only` 更新 `richie-feishu-dispatcher` 自己。
-2. 从 `RICHIE_GITHUB_PROJECT_OWNER` 下发现 richie 可读的项目 repo。
-3. 本机没有的项目 repo 自动 clone 到同级目录，已有的项目 repo 自动 pull。
-4. 扫描每个项目的 `skills/<skill-name>/SKILL.md`。
-5. 把 skill 安装到本机 Codex skills，命名为 `<project-name>--<skill-name>`。
+1. 从 `RICHIE_GITHUB_PROJECT_OWNER` 下发现 richie 可读的项目 repo。
+2. 本机没有的项目 repo 自动 clone 到同级目录，已有的项目 repo 自动 pull。
+3. 扫描每个项目的 `skills/<skill-name>/SKILL.md`。
+4. 把 skill 安装到本机 Codex skills，命名为 `<project-name>--<skill-name>`。
+
+dispatcher 运行中的代码不会被后台 `git pull` 静默替换。Windows 启动脚本在重启前先执行 `git pull --ff-only`，必要时执行 `npm ci`，成功后才停止旧进程并启动新版本；这样磁盘代码和实际运行版本不会分叉。
 
 飞书里调用时使用：
 
@@ -90,6 +91,7 @@ AmandaYYL 或其他协作者只需要被授予对应业务项目 repo 的写权�
 
 ```env
 RICHIE_GIT_SYNC_ENABLED=true
+RICHIE_GIT_SYNC_DISPATCHER=false
 RICHIE_GIT_SYNC_INTERVAL_SECONDS=600
 RICHIE_PROJECT_ROOTS=..
 RICHIE_GITHUB_PROJECT_OWNER=Savannah-395
@@ -117,9 +119,9 @@ RICHIE_GITHUB_EXCLUDED_PROJECT_REPOS=spc-wall-panel-research
 
 排除项不会被自动克隆、拉取、扫描或安装为 Codex skill；其他项目仍按原来的 10 分钟周期同步。
 
-回复策略默认分两层：
+回复策略默认分两层；项目路由可用 `require_mention` 覆盖：
 
-- 指定 skill 群：只要命中 `deploy/richie/allowed-chats.json` 或 skill description 里的 `chat_id`，不用 @，直接走该 skill。
+- 指定 skill 群：命中 `deploy/richie/allowed-chats.json` 后按该路由的 `require_mention` 决定是否必须 @；任务录入路由固定要求 @Richie。
 - 非指定 skill 群：话题第一条消息必须 @ richie，后续同一话题内继续交互不需要重复 @。
 
 项目 Skill 可以使用自己的 Card 2.0 发送器。Dispatcher 会为每个 Codex 任务注入
@@ -186,14 +188,16 @@ npm run sync:once
 - 应用能力：机器人
 - 事件订阅：长连接
 - 事件：`im.message.receive_v1`
+- 回调：`card.action.trigger`（任务确认表单依赖）
 - 权限：接收群消息、发送消息、上传/下载资源、表情回应
+- 任务录入还需要：全员通讯录读取范围，以及目标 Base 的字段读取、记录读取和记录新增权限
 - 把机器人 `richie` 拉进目标群
 
 如果只希望在特定群里工作，设置 `BOT_ALLOWED_CHAT_IDS`。
 
 ## Dispatcher routing and audit
 
-Group messages are checked against dispatcher skill routes first. If a project skill is mapped to the Feishu group `chat_id`, Richie runs that project skill without requiring an @ mention. If no project skill matches, the normal mention policy applies: the first message in a topic must @ richie, then follow-up messages in that active topic do not need another @.
+Group messages are checked against dispatcher skill routes first. Each explicit route can set `require_mention`; the task-intake workflow uses `true`. If no project skill matches, the normal mention policy applies: the first message in a topic must @ richie, then follow-up messages in that active topic do not need another @.
 
 Preferred project-side mapping:
 
