@@ -53,6 +53,7 @@ const fields = [
     ui_type: "SingleSelect",
     property: { options: [{ name: "待开始" }, { name: "进行中" }, { name: "已完成" }] },
   },
+  { field_id: "reminder_date", field_name: "提醒日期", ui_type: "DateTime" },
   { field_id: "start", field_name: "开始日期", ui_type: "DateTime" },
 ];
 
@@ -64,7 +65,8 @@ const schema = {
   department: fields[4],
   reminder: fields[5],
   status: fields[6],
-  startDate: fields[7],
+  reminderDate: fields[7],
+  startDate: fields[8],
 };
 
 function asyncPages(...pages) {
@@ -218,7 +220,7 @@ test("compact card has exact Base labels, two-column short fields and strong tas
   for (const label of ["任务描述", "任务负责人", "集团", "基地", "部门", "提醒频率"]) {
     assert.match(serialized, new RegExp(label));
   }
-  assert.doesNotMatch(serialized, /任务状态/, "ongoing status is system-written and must stay off the card");
+  assert.doesNotMatch(serialized, /任务状态|提醒日期/, "system-written fields must stay off the card");
   assert.equal((serialized.match(/column_set/g) || []).length, 7);
   assert.equal((serialized.match(/\"tag\":\"hr\"/g) || []).length, 1);
   assert.doesNotMatch(serialized, /识别结果|查重结果|处理方式|任务已完成/);
@@ -242,7 +244,7 @@ test("compact card has exact Base labels, two-column short fields and strong tas
   assert.deepEqual(firstOrganizationRow.columns[1].elements[1].selected_values, ["青州"]);
 });
 
-test("resident callback writes confirmed Base fields with ongoing status once and sends one structured-mention text", async (context) => {
+test("resident callback writes ongoing status and confirmation-day reminder date once", async (context) => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), "richie-task-intake-"));
   context.after(() => rm(temporary, { recursive: true, force: true }));
   const deployDir = path.join(temporary, "deploy", "richie");
@@ -261,6 +263,13 @@ test("resident callback writes confirmed Base fields with ongoing status once an
       department: { id: "department", name: "部门", ui_type: "SingleSelect" },
       reminder: { id: "reminder", name: "提醒频率", ui_type: "SingleSelect" },
       status: { id: "status", name: "任务状态", ui_type: "SingleSelect", value: "进行中" },
+      reminderDate: {
+        id: "reminder_date",
+        name: "提醒日期",
+        ui_type: "DateTime",
+        time_zone: "Asia/Shanghai",
+        utc_offset: "+08:00",
+      },
       startDate: { id: "start", name: "开始日期" },
     },
   }), "utf8");
@@ -357,6 +366,7 @@ test("resident callback writes confirmed Base fields with ongoing status once an
     route,
     channel,
     stateDir: path.join(temporary, "state"),
+    clock: () => new Date("2026-09-08T15:45:00+08:00"),
   }), /connection reset after request/);
   assert.equal(calls.baseWrites.length, 1);
   assert.equal(calls.baseWrites[0].method, "POST");
@@ -366,6 +376,7 @@ test("resident callback writes confirmed Base fields with ongoing status once an
     "任务状态",
     "任务描述",
     "基地",
+    "提醒日期",
     "提醒频率",
     "部门",
     "集团",
@@ -375,6 +386,10 @@ test("resident callback writes confirmed Base fields with ongoing status once an
   assert.deepEqual(calls.baseWrites[0].data.create_records[0].部门, ["AIT部"]);
   assert.deepEqual(calls.baseWrites[0].data.create_records[0].提醒频率, ["一周一次"]);
   assert.deepEqual(calls.baseWrites[0].data.create_records[0].任务状态, ["进行中"]);
+  assert.equal(
+    calls.baseWrites[0].data.create_records[0].提醒日期,
+    Date.parse("2026-09-08T00:00:00+08:00"),
+  );
   assert.equal(calls.textMessages.length, 0);
 
   calls.baseError = undefined;
@@ -389,6 +404,7 @@ test("resident callback writes confirmed Base fields with ongoing status once an
       部门: "AIT部",
       提醒频率: "一周一次",
       任务状态: "进行中",
+      提醒日期: Date.parse("2026-09-08T00:00:00+08:00"),
     },
   }];
   assert.equal(await handleTaskIntakeCardAction({
@@ -434,6 +450,13 @@ test("resident workflow recovers missing owner IDs from source mentions", async 
       department: { id: "department", name: "部门", ui_type: "SingleSelect" },
       reminder: { id: "reminder", name: "提醒频率", ui_type: "SingleSelect" },
       status: { id: "status", name: "任务状态", ui_type: "SingleSelect", value: "进行中" },
+      reminderDate: {
+        id: "reminder_date",
+        name: "提醒日期",
+        ui_type: "DateTime",
+        time_zone: "Asia/Shanghai",
+        utc_offset: "+08:00",
+      },
       startDate: { id: "start", name: "开始日期" },
     },
   }), "utf8");
@@ -544,6 +567,7 @@ test("resident workflow recovers missing owner IDs from source mentions", async 
     route,
     channel: { rawClient: makeClient(calls) },
     stateDir: path.join(temporary, "state"),
+    clock: () => new Date("2026-09-09T00:15:00+08:00"),
   }), true);
   assert.equal(calls.baseWrites.length, 1);
   assert.deepEqual(calls.baseWrites[0].data.create_records.map((record) => record.任务负责人), [
@@ -553,6 +577,10 @@ test("resident workflow recovers missing owner IDs from source mentions", async 
   assert.deepEqual(calls.baseWrites[0].data.create_records.map((record) => record.任务状态), [
     ["进行中"],
     ["进行中"],
+  ]);
+  assert.deepEqual(calls.baseWrites[0].data.create_records.map((record) => record.提醒日期), [
+    Date.parse("2026-09-09T00:00:00+08:00"),
+    Date.parse("2026-09-09T00:00:00+08:00"),
   ]);
   const successText = JSON.parse(calls.textMessages[0].data.content).text;
   assert.match(successText, /^✅ 任务录入成功\n1\. /);

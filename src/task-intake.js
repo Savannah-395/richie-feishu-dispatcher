@@ -963,7 +963,7 @@ function readSubmittedTasks(form, pending, directory, schema) {
   });
 }
 
-function baseV3Record(task, config) {
+function baseV3Record(task, config, reminderDate) {
   return {
     [config.fields.description.name]: task.description,
     [config.fields.owner.name]: [{ id: task.ownerOpenId }],
@@ -972,6 +972,7 @@ function baseV3Record(task, config) {
     [config.fields.department.name]: [task.department],
     [config.fields.reminder.name]: [task.reminder],
     [config.fields.status.name]: [configuredTaskStatus(config)],
+    [config.fields.reminderDate.name]: reminderDate,
   };
 }
 
@@ -979,6 +980,34 @@ function configuredTaskStatus(config) {
   const value = asText(config.fields?.status?.value);
   if (!value) {
     throw new Error("任务录入配置缺少确认后的任务状态值");
+  }
+  return value;
+}
+
+function confirmationReminderDate(config, now = new Date()) {
+  const reminderDate = config.fields?.reminderDate;
+  const timeZone = asText(reminderDate?.time_zone);
+  const utcOffset = asText(reminderDate?.utc_offset);
+  const instant = now instanceof Date ? now : new Date(now);
+  if (!timeZone || !/^[+-]\d{2}:\d{2}$/.test(utcOffset) || Number.isNaN(instant.getTime())) {
+    throw new Error("任务录入配置缺少有效的提醒日期时区");
+  }
+
+  let parts;
+  try {
+    parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(instant);
+  } catch {
+    throw new Error(`任务录入配置的提醒日期时区无效：${timeZone}`);
+  }
+  const dateParts = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  const value = Date.parse(`${dateParts.year}-${dateParts.month}-${dateParts.day}T00:00:00${utcOffset}`);
+  if (!Number.isFinite(value)) {
+    throw new Error("无法生成确认当天的提醒日期");
   }
   return value;
 }
@@ -1026,7 +1055,7 @@ function successText(tasks) {
   return ["✅ 任务录入成功", ...items].join("\n");
 }
 
-export async function handleTaskIntakeCardAction({ event, route, channel, stateDir }) {
+export async function handleTaskIntakeCardAction({ event, route, channel, stateDir, clock = () => new Date() }) {
   if (!isTaskIntakeRoute(route) || event?.action?.name !== "confirm_write" || event?.action?.tag !== "button") {
     return false;
   }
@@ -1121,10 +1150,11 @@ export async function handleTaskIntakeCardAction({ event, route, channel, stateD
 
       let createdRecordIds = [];
       if (toCreate.length > 0) {
+        const reminderDate = confirmationReminderDate(config, clock());
         const response = await callApi("写入任务管理表", () => client.request({
           method: "POST",
           url: baseV3BatchCreatePath(config),
-          data: { create_records: toCreate.map((task) => baseV3Record(task, config)) },
+          data: { create_records: toCreate.map((task) => baseV3Record(task, config, reminderDate)) },
         }));
         createdRecordIds = response.data?.record_id_list || [];
         if (createdRecordIds.length !== toCreate.length || createdRecordIds.some((recordId) => !recordId)) {
