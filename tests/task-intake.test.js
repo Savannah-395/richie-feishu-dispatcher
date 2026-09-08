@@ -6,6 +6,7 @@ import test from "node:test";
 
 import {
   buildTaskIntakeCard,
+  buildTaskIntakeSuccessCard,
   handleTaskIntakeCardAction,
   handleTaskIntakeResult,
   parseTaskIntakeProtocol,
@@ -160,6 +161,27 @@ test("task-intake protocol parser accepts bare and fenced JSON", () => {
   assert.deepEqual(parseTaskIntakeProtocol(JSON.stringify(payload)), payload);
   assert.deepEqual(parseTaskIntakeProtocol(`\n\`\`\`json\n${JSON.stringify(payload)}\n\`\`\``), payload);
   assert.equal(parseTaskIntakeProtocol("ordinary reply"), undefined);
+});
+
+test("success card is compact, read-only and keeps complete task descriptions", () => {
+  const fullDescription = "完整任务内容：检查 Maxhub #1 的 A/B、研发_测试与 <回归> 结果";
+  const card = buildTaskIntakeSuccessCard([{
+    description: fullDescription,
+    ownerOpenId: "ou_owner",
+    ownerName: "段星岚",
+  }]);
+
+  assert.equal(card.schema, "2.0");
+  assert.equal(card.config.width_mode, "compact");
+  assert.equal(card.header.template, "green");
+  assert.equal(card.header.title.content, "任务录入成功");
+  assert.equal(card.header.icon.token, "todo_colorful");
+  const serialized = JSON.stringify(card);
+  assert.match(serialized, /完整任务内容/);
+  assert.match(serialized, /检查 Maxhub/);
+  assert.match(serialized, /回归/);
+  assert.match(serialized, /<at id=ou_owner><\/at>/);
+  assert.doesNotMatch(serialized, /任务已完成|本次输入|来源与口径|confirm_write|button|form/);
 });
 
 test("Feishu HTTP errors keep the API code, message and log id", async () => {
@@ -415,13 +437,16 @@ test("resident callback writes ongoing status and confirmation-day reminder date
     stateDir: path.join(temporary, "state"),
   }), true);
   assert.equal(calls.baseWrites.length, 1, "retry must recover the prior write instead of creating again");
-  assert.equal(calls.textMessages.length, 1);
-  assert.equal(calls.textMessages[0].data.uuid.length, 50);
-  const success = JSON.parse(calls.textMessages[0].data.content).text;
-  assert.equal(
-    success,
-    "✅ 任务录入成功\n完成 Maxhub 功能测试并反馈结果 · <at user_id=\"ou_owner\">段星岚</at>",
-  );
+  assert.equal(calls.textMessages.length, 0);
+  assert.equal(calls.cards.length, 2);
+  assert.equal(calls.cards[1].data.uuid.length, 50);
+  const success = JSON.parse(calls.cards[1].data.content);
+  assert.equal(success.schema, "2.0");
+  assert.equal(success.config.width_mode, "compact");
+  assert.equal(success.header.template, "green");
+  assert.equal(success.header.title.content, "任务录入成功");
+  assert.match(calls.cards[1].data.content, /完成 Maxhub 功能测试并反馈结果/);
+  assert.match(calls.cards[1].data.content, /<at id=ou_owner><\/at>/);
 
   await handleTaskIntakeCardAction({
     event,
@@ -430,7 +455,8 @@ test("resident callback writes ongoing status and confirmation-day reminder date
     stateDir: path.join(temporary, "state"),
   });
   assert.equal(calls.baseWrites.length, 1, "duplicate callback must not write twice");
-  assert.equal(calls.textMessages.length, 1, "duplicate callback must not send twice");
+  assert.equal(calls.cards.length, 2, "duplicate callback must not send twice");
+  assert.equal(calls.textMessages.length, 0);
 });
 
 test("resident workflow recovers missing owner IDs from source mentions", async (context) => {
@@ -584,9 +610,13 @@ test("resident workflow recovers missing owner IDs from source mentions", async 
     Date.parse("2026-09-09T00:00:00+08:00"),
     Date.parse("2026-09-09T00:00:00+08:00"),
   ]);
-  const successText = JSON.parse(calls.textMessages[0].data.content).text;
-  assert.match(successText, /^✅ 任务录入成功\n1\. /);
-  assert.match(successText, /\n2\. /);
-  assert.match(successText, /<at user_id="ou_owner">段星岚<\/at>/);
-  assert.match(successText, /<at user_id="ou_yanyu">颜宇<\/at>/);
+  assert.equal(calls.textMessages.length, 0);
+  assert.equal(calls.cards.length, 2);
+  const successCard = JSON.parse(calls.cards[1].data.content);
+  const successContent = successCard.body.elements[0].columns[0].elements
+    .map((element) => element.content);
+  assert.deepEqual(successContent, [
+    "1. 测试一下 maxhub · <at id=ou_owner></at>",
+    "2. 测试一下 youtube · <at id=ou_yanyu></at>",
+  ]);
 });

@@ -798,8 +798,8 @@ async function sendPlainText(channel, chatId, text, uuid) {
   return response.data.message_id;
 }
 
-async function sendInteractiveCard(channel, chatId, card, uuid) {
-  const response = await callApi("发送任务确认卡片", () => channel.rawClient.im.v1.message.create({
+async function sendInteractiveCard(channel, chatId, card, uuid, operation = "发送任务确认卡片") {
+  const response = await callApi(operation, () => channel.rawClient.im.v1.message.create({
     params: { receive_id_type: "chat_id" },
     data: {
       receive_id: chatId,
@@ -809,7 +809,7 @@ async function sendInteractiveCard(channel, chatId, card, uuid) {
     },
   }));
   if (!response.data?.message_id) {
-    throw new Error("确认卡片发送成功但未返回 message_id");
+    throw new Error(`${operation}成功但未返回 message_id`);
   }
   return response.data.message_id;
 }
@@ -1052,17 +1052,70 @@ function recoveryCutoff(pending) {
   return Number.isFinite(startedAt) ? startedAt - 30_000 : 0;
 }
 
-function safeMessageText(value) {
-  return asText(value).replace(/[<>]/g, (character) => character === "<" ? "＜" : "＞");
+function escapeCardMarkdown(value) {
+  const entities = {
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    "*": "&#42;",
+    "~": "&#126;",
+    "[": "&#91;",
+    "]": "&#93;",
+    "(": "&#40;",
+    ")": "&#41;",
+    "`": "&#96;",
+    "#": "&#35;",
+    ":": "&#58;",
+    "_": "&#95;",
+  };
+  return Array.from(asText(value), (character) => entities[character] || character).join("");
 }
 
-function successText(tasks) {
+function cardOwnerMention(task) {
+  const ownerOpenId = asText(task.ownerOpenId);
+  if (!/^ou_[A-Za-z0-9_-]+$/.test(ownerOpenId)) {
+    throw new Error(`无法生成任务成功卡片：“${asText(task.ownerName) || "未知责任人"}”缺少有效的 open_id`);
+  }
+  return `<at id=${ownerOpenId}></at>`;
+}
+
+export function buildTaskIntakeSuccessCard(tasks) {
   const showNumbers = tasks.length > 1;
-  const items = tasks.map((task, index) => (
-    `${showNumbers ? `${index + 1}. ` : ""}${safeMessageText(task.description)} · `
-      + `<at user_id="${task.ownerOpenId}">${safeMessageText(task.ownerName)}</at>`
-  ));
-  return ["✅ 任务录入成功", ...items].join("\n");
+  const taskElements = tasks.map((task, index) => ({
+    tag: "markdown",
+    content: `${showNumbers ? `${index + 1}. ` : ""}${escapeCardMarkdown(task.description)} · ${cardOwnerMention(task)}`,
+    text_size: "normal",
+  }));
+  return {
+    schema: "2.0",
+    config: {
+      update_multi: true,
+      width_mode: "compact",
+      summary: { content: "任务录入成功" },
+    },
+    header: {
+      template: "green",
+      title: cardText("任务录入成功"),
+      icon: { tag: "standard_icon", token: "todo_colorful" },
+    },
+    body: {
+      direction: "vertical",
+      padding: "12px 12px 20px 12px",
+      elements: [{
+        tag: "column_set",
+        flex_mode: "none",
+        background_style: "green-50",
+        columns: [{
+          tag: "column",
+          width: "weighted",
+          weight: 1,
+          padding: "12px",
+          vertical_spacing: "8px",
+          elements: taskElements,
+        }],
+      }],
+    },
+  };
 }
 
 export async function handleTaskIntakeCardAction({ event, route, channel, stateDir, clock = () => new Date() }) {
@@ -1173,11 +1226,12 @@ export async function handleTaskIntakeCardAction({ event, route, channel, stateD
       }
 
       const completedTasks = [...recovered.map((item) => item.task), ...toCreate];
-      await sendPlainText(
+      await sendInteractiveCard(
         channel,
         config.chat_id,
-        successText(completedTasks),
+        buildTaskIntakeSuccessCard(completedTasks),
         taskMessageUuid("success", event.messageId),
+        "发送任务成功卡片",
       );
       await store.write(key, {
         ...pending,
