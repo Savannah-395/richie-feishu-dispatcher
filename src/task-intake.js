@@ -9,6 +9,7 @@ const PROTOCOL = "richie.task-intake.v1";
 const DEFAULT_MAX_CARD_BYTES = 28_000;
 const DEFAULT_MAX_TASKS_PER_CARD = 6;
 const DIRECTORY_TTL_MS = 10 * 60 * 1000;
+const MAX_MESSAGE_UUID_LENGTH = 50;
 let directoryCache;
 
 export const TASK_INTAKE_OUTPUT_SCHEMA = {
@@ -119,6 +120,15 @@ async function callApi(operation, request) {
 
 function hashToken(...parts) {
   return createHash("sha256").update(parts.join(":"), "utf8").digest("hex").slice(0, 32);
+}
+
+function taskMessageUuid(kind, ...parts) {
+  const prefix = `task-intake-${kind}-`;
+  const availableHashLength = MAX_MESSAGE_UUID_LENGTH - prefix.length;
+  if (availableHashLength < 16) {
+    throw new Error(`任务录入消息幂等键前缀过长：${kind}`);
+  }
+  return `${prefix}${hashToken(...parts).slice(0, availableHashLength)}`;
 }
 
 function optionItems(field) {
@@ -827,7 +837,7 @@ export async function handleTaskIntakeResult({ route, message, result, channel, 
       channel,
       config.chat_id,
       asText(protocol.message) || "未识别到明确待办，请发送具体任务内容并 @责任人。",
-      `task-intake-unrecognized-${hashToken(message.messageId)}`,
+      taskMessageUuid("unrecognized", message.messageId),
     );
     return true;
   }
@@ -856,7 +866,7 @@ export async function handleTaskIntakeResult({ route, message, result, channel, 
       channel,
       config.chat_id,
       "未识别到明确待办，请发送具体任务内容并 @责任人。",
-      `task-intake-empty-${hashToken(message.messageId)}`,
+      taskMessageUuid("empty", message.messageId),
     );
     return true;
   }
@@ -869,7 +879,7 @@ export async function handleTaskIntakeResult({ route, message, result, channel, 
       channel,
       config.chat_id,
       group.card,
-      `task-intake-card-${hashToken(message.messageId, offset + 1)}`,
+      taskMessageUuid("card", message.messageId, offset + 1),
     );
     await store.write(`card:${cardMessageId}`, {
       version: 1,
@@ -1167,7 +1177,7 @@ export async function handleTaskIntakeCardAction({ event, route, channel, stateD
         channel,
         config.chat_id,
         successText(completedTasks),
-        `task-intake-success-${hashToken(event.messageId)}`,
+        taskMessageUuid("success", event.messageId),
       );
       await store.write(key, {
         ...pending,
@@ -1195,6 +1205,6 @@ export async function sendTaskIntakeError(channel, chatId, message, key = "") {
     channel,
     chatId,
     `任务录入失败：${asText(message) || "未知错误"}`,
-    `task-intake-error-${hashToken(key || chatId, message)}`,
+    taskMessageUuid("error", key || chatId, message),
   );
 }

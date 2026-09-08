@@ -335,6 +335,7 @@ test("resident callback writes ongoing status and confirmation-day reminder date
     stateDir: path.join(temporary, "state"),
   }), true);
   assert.equal(calls.cards.length, 1);
+  assert.ok(calls.cards[0].data.uuid.length <= 50, "card idempotency key must satisfy Feishu's limit");
   assert.equal(calls.baseWrites.length, 0, "preview must never write Base");
   const cardJson = calls.cards[0].data.content;
   assert.match(cardJson, /\"initial_option\":\"再生\"/);
@@ -415,6 +416,7 @@ test("resident callback writes ongoing status and confirmation-day reminder date
   }), true);
   assert.equal(calls.baseWrites.length, 1, "retry must recover the prior write instead of creating again");
   assert.equal(calls.textMessages.length, 1);
+  assert.equal(calls.textMessages[0].data.uuid.length, 50);
   const success = JSON.parse(calls.textMessages[0].data.content).text;
   assert.equal(
     success,
