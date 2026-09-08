@@ -9,6 +9,7 @@ import {
   handleTaskIntakeCardAction,
   handleTaskIntakeResult,
   parseTaskIntakeProtocol,
+  sendTaskIntakeError,
 } from "../src/task-intake.js";
 
 const fields = [
@@ -124,6 +125,9 @@ function makeClient(calls) {
       v1: {
         message: {
           create: async (payload) => {
+            if (calls.messageError) {
+              throw calls.messageError;
+            }
             if (payload.data.msg_type === "interactive") {
               calls.cards.push(payload);
               return { code: 0, data: { message_id: "om_card" } };
@@ -142,6 +146,30 @@ test("task-intake protocol parser accepts bare and fenced JSON", () => {
   assert.deepEqual(parseTaskIntakeProtocol(JSON.stringify(payload)), payload);
   assert.deepEqual(parseTaskIntakeProtocol(`\n\`\`\`json\n${JSON.stringify(payload)}\n\`\`\``), payload);
   assert.equal(parseTaskIntakeProtocol("ordinary reply"), undefined);
+});
+
+test("Feishu HTTP errors keep the API code, message and log id", async () => {
+  const messageError = new Error("Request failed with status code 400");
+  messageError.response = {
+    status: 400,
+    data: {
+      code: 230099,
+      msg: "Failed to create card content",
+      error: { log_id: "log_test" },
+    },
+  };
+  const calls = {
+    cards: [],
+    baseWrites: [],
+    textMessages: [],
+    records: [],
+    messageError,
+  };
+
+  await assert.rejects(
+    sendTaskIntakeError({ rawClient: makeClient(calls) }, "oc_test", "boom"),
+    /发送飞书消息失败（230099）：Failed to create card content；log_id=log_test/,
+  );
 });
 
 test("compact card has exact Base labels, two-column short fields and strong task separators", () => {
@@ -174,6 +202,7 @@ test("compact card has exact Base labels, two-column short fields and strong tas
   });
   const serialized = JSON.stringify(card);
   assert.match(serialized, /任务录入确认/);
+  assert.equal(card.header.padding, undefined, "header padding must use the server default");
   for (const label of ["任务描述", "任务负责人", "集团", "基地", "部门", "提醒频率"]) {
     assert.match(serialized, new RegExp(label));
   }
@@ -183,6 +212,7 @@ test("compact card has exact Base labels, two-column short fields and strong tas
   assert.doesNotMatch(serialized, /确认后写入任务管理表/);
   assert.match(serialized, /\"rows\":1/);
   assert.match(serialized, /\"auto_resize\":true/);
+  assert.doesNotMatch(serialized, /initial_options/);
   assert.doesNotMatch(serialized, /leftWeight|rightWeight/, "layout options must not leak into card JSON");
   assert.match(serialized, /\"form_action_type\":\"submit\"/);
   const firstTaskRow = card.body.elements[0].elements.find((element) => (
@@ -192,6 +222,11 @@ test("compact card has exact Base labels, two-column short fields and strong tas
   assert.equal(firstTaskRow.flex_mode, "none");
   assert.deepEqual(firstTaskRow.columns.map((item) => item.weight), [3, 2]);
   assert.equal(firstTaskRow.columns[1].elements[1].name, "t1_owner");
+  const firstOrganizationRow = card.body.elements[0].elements.find((element) => (
+    element.tag === "column_set"
+      && element.columns?.[1]?.elements?.some((item) => item.name === "t1_bases")
+  ));
+  assert.deepEqual(firstOrganizationRow.columns[1].elements[1].selected_values, ["青州"]);
 });
 
 test("resident callback writes only confirmed Base fields once and sends one structured-mention text", async (context) => {
@@ -280,7 +315,7 @@ test("resident callback writes only confirmed Base fields once and sends one str
   assert.equal(calls.baseWrites.length, 0, "preview must never write Base");
   const cardJson = calls.cards[0].data.content;
   assert.match(cardJson, /\"initial_option\":\"再生\"/);
-  assert.match(cardJson, /\"initial_options\":\[\"镇江\"\]/);
+  assert.match(cardJson, /\"selected_values\":\[\"镇江\"\]/);
   assert.match(cardJson, /\"initial_option\":\"生产部\"/);
 
   const event = {
@@ -426,9 +461,9 @@ test("resident workflow recovers missing owner IDs from source mentions", async 
   assert.match(card, /"initial_option":"ou_yanyu"/);
   assert.match(card, /"value":"ou_yanyu"/);
   assert.match(card, /"initial_option":"医疗"/);
-  assert.match(card, /"initial_options":\["医疗"\]/);
+  assert.match(card, /"selected_values":\["医疗"\]/);
   assert.match(card, /"initial_option":"再生"/);
-  assert.match(card, /"initial_options":\["镇江"\]/);
+  assert.match(card, /"selected_values":\["镇江"\]/);
   assert.match(card, /"initial_option":"AIT部"/);
   assert.match(card, /"initial_option":"生产部"/);
 

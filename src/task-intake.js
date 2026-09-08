@@ -94,6 +94,29 @@ function normalizeApiError(response, operation) {
   return response;
 }
 
+function thrownApiErrorMessage(error, operation) {
+  const payload = error?.response?.data;
+  if (!payload || typeof payload !== "object") {
+    return "";
+  }
+  const code = payload.code || error.response?.status;
+  const message = asText(payload.msg || payload.message || error.message) || "未知错误";
+  const logId = asText(payload.error?.log_id || payload.log_id);
+  return `${operation}失败${code ? `（${code}）` : ""}：${message}${logId ? `；log_id=${logId}` : ""}`;
+}
+
+async function callApi(operation, request) {
+  try {
+    return normalizeApiError(await request(), operation);
+  } catch (error) {
+    const message = thrownApiErrorMessage(error, operation);
+    if (message) {
+      throw new Error(message, { cause: error });
+    }
+    throw error;
+  }
+}
+
 function hashToken(...parts) {
   return createHash("sha256").update(parts.join(":"), "utf8").digest("hex").slice(0, 32);
 }
@@ -338,13 +361,13 @@ async function loadMentionOwnerProfiles(client, owners) {
   }
   return Promise.all(owners.map(async (owner) => {
     try {
-      const response = normalizeApiError(await client.contact.v3.user.get({
+      const response = await callApi(`读取${owner.name || "任务负责人"}的通讯录编制信息`, () => client.contact.v3.user.get({
         params: {
           user_id_type: "open_id",
           department_id_type: "open_department_id",
         },
         path: { user_id: owner.openId },
-      }), `读取${owner.name || "任务负责人"}的通讯录编制信息`);
+      }));
       return directoryUser(response.data?.user || {}, owner);
     } catch (error) {
       console.warn(`Unable to load organization profile for ${owner.openId}`, error);
@@ -360,14 +383,14 @@ async function loadEmployeeDirectory(client, config, { force = false } = {}) {
 
   let fullScopeProbe;
   try {
-    fullScopeProbe = normalizeApiError(await client.contact.v3.user.findByDepartment({
+    fullScopeProbe = await callApi("校验全员通讯录授权范围", () => client.contact.v3.user.findByDepartment({
       params: {
         department_id: "0",
         department_id_type: "open_department_id",
         user_id_type: "open_id",
         page_size: 1,
       },
-    }), "校验全员通讯录授权范围");
+    }));
   } catch (error) {
     throw new Error(
       "Richie 的通讯录授权范围尚未覆盖全集团。请在飞书开放平台把该应用的通讯录可用范围设为全部员工，发布后再试。",
@@ -552,7 +575,7 @@ function staticSelect({ name, placeholder, options, initial, multi = false }) {
     placeholder: cardText(placeholder),
     options: options.map((option) => ({ text: cardText(option.text), value: option.value })),
     ...(multi
-      ? { initial_options: validInitial.length ? validInitial : undefined }
+      ? { selected_values: validInitial.length ? validInitial : undefined }
       : { initial_option: validInitial || undefined }),
   };
 }
@@ -699,7 +722,6 @@ export function buildTaskIntakeCard({ tasks, directory, schema }) {
       template: "blue",
       title: cardText("任务录入确认"),
       icon: { tag: "standard_icon", token: "todo_colorful" },
-      padding: "10px 12px",
     },
     body: {
       padding: "12px 12px 16px 12px",
@@ -747,7 +769,7 @@ function partitionTasks(tasks, directory, schema, config) {
 }
 
 async function sendPlainText(channel, chatId, text, uuid) {
-  const response = normalizeApiError(await channel.rawClient.im.v1.message.create({
+  const response = await callApi("发送飞书消息", () => channel.rawClient.im.v1.message.create({
     params: { receive_id_type: "chat_id" },
     data: {
       receive_id: chatId,
@@ -755,7 +777,7 @@ async function sendPlainText(channel, chatId, text, uuid) {
       content: JSON.stringify({ text }),
       uuid,
     },
-  }), "发送飞书消息");
+  }));
   if (!response.data?.message_id) {
     throw new Error("发送飞书消息成功但未返回 message_id");
   }
@@ -763,7 +785,7 @@ async function sendPlainText(channel, chatId, text, uuid) {
 }
 
 async function sendInteractiveCard(channel, chatId, card, uuid) {
-  const response = normalizeApiError(await channel.rawClient.im.v1.message.create({
+  const response = await callApi("发送任务确认卡片", () => channel.rawClient.im.v1.message.create({
     params: { receive_id_type: "chat_id" },
     data: {
       receive_id: chatId,
@@ -771,7 +793,7 @@ async function sendInteractiveCard(channel, chatId, card, uuid) {
       content: JSON.stringify(card),
       uuid,
     },
-  }), "发送任务确认卡片");
+  }));
   if (!response.data?.message_id) {
     throw new Error("确认卡片发送成功但未返回 message_id");
   }
@@ -1038,14 +1060,14 @@ export async function handleTaskIntakeCardAction({ event, route, channel, stateD
         throw new Error("单次确认最多写入 500 条任务");
       }
 
-      const response = normalizeApiError(await client.bitable.v1.appTableRecord.batchCreate({
+      const response = await callApi("写入任务管理表", () => client.bitable.v1.appTableRecord.batchCreate({
         params: {
           user_id_type: "open_id",
           client_token: hashToken("task-intake", event.messageId),
         },
         path: { app_token: config.base_token, table_id: config.table_id },
         data: { records: toCreate.map((task) => baseRecord(task, config)) },
-      }), "写入任务管理表");
+      }));
       const created = response.data?.records || [];
       if (created.length !== toCreate.length || created.some((record) => !record.record_id)) {
         throw new Error(`任务管理表仅返回 ${created.length}/${toCreate.length} 条成功记录`);
