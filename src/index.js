@@ -4,6 +4,7 @@ import path from "node:path";
 import { config } from "./config.js";
 import { downloadMessageAttachments, formatAttachmentSummary, shouldUseAttachmentContext } from "./attachment-manager.js";
 import { extractCodexPrompt, isCodexCommand, runCodexTask } from "./codex-runner.js";
+import { loadTaskIntakeDocumentContext } from "./document-context.js";
 import { buildMessageCards, extractSourceSection } from "./message-card.js";
 import { buildStructuredMentions } from "./mention-utils.js";
 import { shouldSuppressDispatcherReply } from "./native-reply.js";
@@ -429,12 +430,13 @@ function formatSkillRoutePrompt(skillRoute) {
 
   if (isTaskIntakeRoute(skillRoute)) {
     lines.push(
-      "- This workflow is dispatcher-owned. Do not call lark-cli, do not send a Feishu message/card, do not write Base records, and do not wait for card callbacks.",
+      "- This workflow is dispatcher-owned. Do not call lark-cli, send a Feishu message/card, write Base records, or wait for card callbacks. Feishu document links are fetched read-only by the dispatcher and supplied in dispatcher_fetched_feishu_documents.",
       "- Only extract/classify tasks and return exactly one JSON object using protocol richie.task-intake.v1.",
       "- Valid candidate result: {\"protocol\":\"richie.task-intake.v1\",\"status\":\"candidates\",\"message\":\"\",\"tasks\":[{\"description\":\"task text without assignment/trigger @mentions\",\"owner_open_id\":\"ou_xxx\",\"owner_name\":\"name\",\"group\":\"\",\"bases\":[],\"department\":\"\",\"reminder_frequency\":\"一周一次\",\"duplicate_mode\":\"none\",\"duplicate_note\":\"\"}]}",
       "- No-task result: {\"protocol\":\"richie.task-intake.v1\",\"status\":\"unrecognized\",\"message\":\"未识别到明确待办，请发送具体任务内容并 @责任人。\",\"tasks\":[]}.",
-      "- Use the structured Feishu mentions in the trusted context/message payload when available. For each task, only the first real user mention is the default owner; later mentions and Richie are not owners.",
-      "- Output JSON only, without Markdown fences or commentary. The resident dispatcher builds the editable card, resolves Base defaults, receives confirmation, writes Base, and sends the success text.",
+      "- Use structured Feishu mentions from the message and the user-id attributes of user cite elements in dispatcher-fetched documents. For each task, only the first real user mention is the default owner; later mentions and Richie are not owners.",
+      "- Never infer that a document is unreadable when dispatcher_fetched_feishu_documents contains its content. Only report a document read failure when the dispatcher supplies an explicit fetch error.",
+      "- Output JSON only, without Markdown fences or commentary. The resident dispatcher builds the editable card, resolves Base defaults, receives confirmation, writes Base, and sends the success card.",
     );
   }
 
@@ -764,6 +766,21 @@ async function handleMessage(message) {
             : forcedCodex
               ? "forced-codex"
               : "auto-codex";
+        let taskDocumentContext = "";
+        if (isTaskIntakeRoute(skillRoute)) {
+          const documentContext = await loadTaskIntakeDocumentContext(messageContent);
+          if (documentContext.errors.length > 0) {
+            await sendTaskIntakeError(
+              channel,
+              message.chatId,
+              documentContext.errors.map((item) => item.message).join("；"),
+              message.messageId,
+            );
+            await markComplete();
+            return;
+          }
+          taskDocumentContext = documentContext.context;
+        }
         let auditStart;
         const codexOptions = fullAccessPrefix
           ? {
@@ -800,7 +817,9 @@ async function handleMessage(message) {
         let result;
         try {
           result = await runCodexTask(config.codex, buildCodexPrompt({
-            latestMessage: codexPrompt || userEntry.content,
+            latestMessage: isTaskIntakeRoute(skillRoute)
+              ? [codexPrompt || userEntry.content, taskDocumentContext].filter(Boolean).join("\n\n")
+              : codexPrompt || userEntry.content,
             threadTranscript,
             skillRoute,
             message,

@@ -143,6 +143,10 @@ PYTHONIOENCODING=utf-8
 
 `scripts/start-richie-background.ps1` 会在启动前执行 `chcp 65001` 并设置上述环境变量。
 
+任务录入消息包含飞书文档或 Wiki 链接时，dispatcher 会在启动 Codex 前直接执行
+`lark-cli docs +fetch --as bot --detail full`，以 Richie 机器人身份只读获取结构化正文和文档内责任人 `user-id`。
+因此运行机器必须能从 `PATH` 找到 `lark-cli`；如果可执行文件不在 `PATH`，用 `LARK_CLI_BIN` 配置其完整路径。
+
 ## 启动
 
 ```powershell
@@ -190,7 +194,7 @@ npm run sync:once
 - 事件：`im.message.receive_v1`
 - 回调：`card.action.trigger`（任务确认表单依赖）
 - 权限：接收群消息、发送消息、上传/下载资源、表情回应
-- 任务录入还需要：全员通讯录读取范围，以及目标 Base 的字段读取、记录读取和记录新增权限
+- 任务录入还需要：飞书文档/Wiki 读取权限、全员通讯录读取范围，以及目标 Base 的字段读取、记录读取和记录新增权限
 - 把机器人 `richie` 拉进目标群
 
 如果只希望在特定群里工作，设置 `BOT_ALLOWED_CHAT_IDS`。
