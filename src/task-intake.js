@@ -121,20 +121,6 @@ function hashToken(...parts) {
   return createHash("sha256").update(parts.join(":"), "utf8").digest("hex").slice(0, 32);
 }
 
-function deterministicUuidV4(...parts) {
-  const bytes = createHash("sha256").update(parts.join(":"), "utf8").digest().subarray(0, 16);
-  bytes[6] = (bytes[6] & 0x0f) | 0x40;
-  bytes[8] = (bytes[8] & 0x3f) | 0x80;
-  const hex = bytes.toString("hex");
-  return [
-    hex.slice(0, 8),
-    hex.slice(8, 12),
-    hex.slice(12, 16),
-    hex.slice(16, 20),
-    hex.slice(20, 32),
-  ].join("-");
-}
-
 function optionItems(field) {
   return (field?.property?.options || [])
     .map((option) => ({ text: asText(option.name), value: asText(option.name) }))
@@ -973,17 +959,44 @@ function readSubmittedTasks(form, pending, directory, schema) {
   });
 }
 
-function baseRecord(task, config) {
+function baseV3Record(task, config) {
   return {
-    fields: {
-      [config.fields.description.name]: task.description,
-      [config.fields.owner.name]: [{ id: task.ownerOpenId }],
-      [config.fields.group.name]: task.group,
-      [config.fields.base.name]: task.bases,
-      [config.fields.department.name]: task.department,
-      [config.fields.reminder.name]: task.reminder,
-    },
+    [config.fields.description.name]: task.description,
+    [config.fields.owner.name]: [{ id: task.ownerOpenId }],
+    [config.fields.group.name]: [task.group],
+    [config.fields.base.name]: task.bases,
+    [config.fields.department.name]: [task.department],
+    [config.fields.reminder.name]: [task.reminder],
   };
+}
+
+function baseV3BatchCreatePath(config) {
+  const baseToken = encodeURIComponent(config.base_token);
+  const tableId = encodeURIComponent(config.table_id);
+  return `/open-apis/base/v3/bases/${baseToken}/tables/${tableId}/records/batch_create`;
+}
+
+function recordMatchesTask(record, task, config) {
+  const fields = record?.fields || {};
+  const ownerIds = new Set((Array.isArray(fields[config.fields.owner.name])
+    ? fields[config.fields.owner.name]
+    : [fields[config.fields.owner.name]])
+    .map((owner) => asText(owner?.id || owner?.open_id))
+    .filter(Boolean));
+  const recordBases = cellStrings(fields[config.fields.base.name]).sort();
+  const taskBases = [...task.bases].sort();
+  return normalizeDescription(fields[config.fields.description.name]) === normalizeDescription(task.description)
+    && ownerIds.has(task.ownerOpenId)
+    && firstNonEmpty(fields[config.fields.group.name]) === task.group
+    && recordBases.length === taskBases.length
+    && recordBases.every((base, index) => base === taskBases[index])
+    && firstNonEmpty(fields[config.fields.department.name]) === task.department
+    && firstNonEmpty(fields[config.fields.reminder.name]) === task.reminder;
+}
+
+function recoveryCutoff(pending) {
+  const startedAt = Date.parse(pending.processingAt || pending.lastErrorAt || "");
+  return Number.isFinite(startedAt) ? startedAt - 30_000 : 0;
 }
 
 function safeMessageText(value) {
@@ -1055,9 +1068,25 @@ export async function handleTaskIntakeCardAction({ event, route, channel, stateD
       const existingDescriptions = new Set(records
         .map((record) => normalizeDescription(record.fields?.[config.fields.description.name]))
         .filter(Boolean));
+      const canRecoverPriorWrite = pending.status === "processing" || Boolean(pending.lastErrorAt);
+      const createdAfter = recoveryCutoff(pending);
+      const recovered = [];
+      const recoveredRecordIds = new Set();
       const toCreate = [];
       for (const task of submitted) {
         if (task.mode === "skip") {
+          continue;
+        }
+        const recoveredRecord = canRecoverPriorWrite
+          ? records.find((record) => (
+            normalizeDate(record.created_time) >= createdAfter
+              && !recoveredRecordIds.has(record.record_id)
+              && recordMatchesTask(record, task, config)
+          ))
+          : undefined;
+        if (recoveredRecord?.record_id) {
+          recovered.push({ task, recordId: recoveredRecord.record_id });
+          recoveredRecordIds.add(recoveredRecord.record_id);
           continue;
         }
         const isExactDuplicateNow = existingDescriptions.has(normalizeDescription(task.description));
@@ -1067,30 +1096,31 @@ export async function handleTaskIntakeCardAction({ event, route, channel, stateD
         toCreate.push(task);
       }
 
-      if (toCreate.length === 0) {
+      if (toCreate.length === 0 && recovered.length === 0) {
         throw new Error("确认时所有任务均为已存在任务或被选择跳过，本次没有写入新记录");
       }
       if (toCreate.length > 500) {
         throw new Error("单次确认最多写入 500 条任务");
       }
 
-      const response = await callApi("写入任务管理表", () => client.bitable.v1.appTableRecord.batchCreate({
-        params: {
-          user_id_type: "open_id",
-          client_token: deterministicUuidV4("task-intake", event.messageId),
-        },
-        path: { app_token: config.base_token, table_id: config.table_id },
-        data: { records: toCreate.map((task) => baseRecord(task, config)) },
-      }));
-      const created = response.data?.records || [];
-      if (created.length !== toCreate.length || created.some((record) => !record.record_id)) {
-        throw new Error(`任务管理表仅返回 ${created.length}/${toCreate.length} 条成功记录`);
+      let createdRecordIds = [];
+      if (toCreate.length > 0) {
+        const response = await callApi("写入任务管理表", () => client.request({
+          method: "POST",
+          url: baseV3BatchCreatePath(config),
+          data: { create_records: toCreate.map((task) => baseV3Record(task, config)) },
+        }));
+        createdRecordIds = response.data?.record_id_list || [];
+        if (createdRecordIds.length !== toCreate.length || createdRecordIds.some((recordId) => !recordId)) {
+          throw new Error(`任务管理表仅返回 ${createdRecordIds.length}/${toCreate.length} 条成功记录`);
+        }
       }
 
+      const completedTasks = [...recovered.map((item) => item.task), ...toCreate];
       await sendPlainText(
         channel,
         config.chat_id,
-        successText(toCreate),
+        successText(completedTasks),
         `task-intake-success-${hashToken(event.messageId)}`,
       );
       await store.write(key, {
@@ -1099,7 +1129,7 @@ export async function handleTaskIntakeCardAction({ event, route, channel, stateD
         operatorOpenId: event.operator?.openId || "",
         eventId: raw.eventId,
         completedAt: new Date().toISOString(),
-        recordIds: created.map((record) => record.record_id),
+        recordIds: [...recovered.map((item) => item.recordId), ...createdRecordIds],
       });
       return true;
     } catch (error) {

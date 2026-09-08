@@ -72,6 +72,18 @@ function asyncPages(...pages) {
 
 function makeClient(calls) {
   return {
+    request: async (payload) => {
+      calls.baseWrites.push(payload);
+      if (calls.baseError) {
+        throw calls.baseError;
+      }
+      return {
+        code: 0,
+        data: {
+          record_id_list: payload.data.create_records.map((_, index) => `rec_${index}`),
+        },
+      };
+    },
     contact: {
       v3: {
         user: {
@@ -111,13 +123,6 @@ function makeClient(calls) {
         },
         appTableRecord: {
           listWithIterator: async () => asyncPages({ items: calls.records || [] }),
-          batchCreate: async (payload) => {
-            calls.baseWrites.push(payload);
-            return {
-              code: 0,
-              data: { records: payload.data.records.map((record, index) => ({ ...record, record_id: `rec_${index}` })) },
-            };
-          },
         },
       },
     },
@@ -337,18 +342,17 @@ test("resident callback writes only confirmed Base fields once and sends one str
       },
     },
   };
-  assert.equal(await handleTaskIntakeCardAction({
+  calls.baseError = new Error("connection reset after request");
+  await assert.rejects(handleTaskIntakeCardAction({
     event,
     route,
     channel,
     stateDir: path.join(temporary, "state"),
-  }), true);
+  }), /connection reset after request/);
   assert.equal(calls.baseWrites.length, 1);
-  assert.match(
-    calls.baseWrites[0].params.client_token,
-    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-  );
-  assert.deepEqual(Object.keys(calls.baseWrites[0].data.records[0].fields).sort(), [
+  assert.equal(calls.baseWrites[0].method, "POST");
+  assert.equal(calls.baseWrites[0].url, "/open-apis/base/v3/bases/base/tables/table/records/batch_create");
+  assert.deepEqual(Object.keys(calls.baseWrites[0].data.create_records[0]).sort(), [
     "任务负责人",
     "任务描述",
     "基地",
@@ -356,6 +360,32 @@ test("resident callback writes only confirmed Base fields once and sends one str
     "部门",
     "集团",
   ].sort());
+  assert.deepEqual(calls.baseWrites[0].data.create_records[0].集团, ["医疗"]);
+  assert.deepEqual(calls.baseWrites[0].data.create_records[0].基地, ["青州"]);
+  assert.deepEqual(calls.baseWrites[0].data.create_records[0].部门, ["AIT部"]);
+  assert.deepEqual(calls.baseWrites[0].data.create_records[0].提醒频率, ["一周一次"]);
+  assert.equal(calls.textMessages.length, 0);
+
+  calls.baseError = undefined;
+  calls.records = [{
+    record_id: "rec_recovered",
+    created_time: Date.now(),
+    fields: {
+      任务描述: "完成 Maxhub 功能测试并反馈结果",
+      任务负责人: [{ id: "ou_owner" }],
+      集团: "医疗",
+      基地: ["青州"],
+      部门: "AIT部",
+      提醒频率: "一周一次",
+    },
+  }];
+  assert.equal(await handleTaskIntakeCardAction({
+    event,
+    route,
+    channel,
+    stateDir: path.join(temporary, "state"),
+  }), true);
+  assert.equal(calls.baseWrites.length, 1, "retry must recover the prior write instead of creating again");
   assert.equal(calls.textMessages.length, 1);
   const success = JSON.parse(calls.textMessages[0].data.content).text;
   assert.match(success, /完成 Maxhub 功能测试并反馈结果/);
@@ -502,7 +532,7 @@ test("resident workflow recovers missing owner IDs from source mentions", async 
     stateDir: path.join(temporary, "state"),
   }), true);
   assert.equal(calls.baseWrites.length, 1);
-  assert.deepEqual(calls.baseWrites[0].data.records.map((record) => record.fields.任务负责人), [
+  assert.deepEqual(calls.baseWrites[0].data.create_records.map((record) => record.任务负责人), [
     [{ id: "ou_owner" }],
     [{ id: "ou_yanyu" }],
   ]);
