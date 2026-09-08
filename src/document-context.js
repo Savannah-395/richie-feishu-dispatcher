@@ -169,6 +169,16 @@ function renderElement(element) {
   return "";
 }
 
+function elementText(element) {
+  if (element?.text_run) {
+    return `${element.text_run.content || ""}`;
+  }
+  if (element?.equation?.content) {
+    return `${element.equation.content}`;
+  }
+  return "";
+}
+
 function richTextPart(block) {
   for (const [kind, value] of Object.entries(block || {})) {
     if (Array.isArray(value?.elements)) {
@@ -218,6 +228,24 @@ function renderDocumentBlocks(blocks) {
   return lines.join("\n");
 }
 
+function extractTaskOwnerHints(blocks) {
+  const hints = [];
+  for (const block of blocks) {
+    const part = richTextPart(block);
+    if (!part) {
+      continue;
+    }
+    const description = part.elements.map(elementText).join("").replace(/\s+/g, " ").trim();
+    const ownerOpenId = part.elements
+      .map((element) => `${element?.mention_user?.user_id || ""}`.trim())
+      .find(Boolean);
+    if (description && ownerOpenId) {
+      hints.push({ description, ownerOpenId });
+    }
+  }
+  return hints;
+}
+
 function formatFetchError(url, error) {
   const code = error?.apiCode || "";
   const operation = error?.operation ? `${error.operation}：` : "";
@@ -253,6 +281,7 @@ async function fetchDocument(url, client) {
         revisionId,
         title: info.title || resolved.title,
         content,
+        taskOwnerHints: extractTaskOwnerHints(blocks),
       },
     };
   } catch (error) {
@@ -293,6 +322,7 @@ export async function loadTaskIntakeDocumentContext(content, { client } = {}) {
     urls,
     documents,
     errors,
+    taskOwnerHints: documents.flatMap((document) => document.taskOwnerHints || []),
     context: formatDocumentContext(documents),
   };
 }

@@ -767,6 +767,7 @@ async function handleMessage(message) {
               ? "forced-codex"
               : "auto-codex";
         let taskDocumentContext = "";
+        let taskDocumentOwnerHints = [];
         if (isTaskIntakeRoute(skillRoute)) {
           const documentContext = await loadTaskIntakeDocumentContext(messageContent, {
             client: channel.rawClient,
@@ -782,6 +783,7 @@ async function handleMessage(message) {
             return;
           }
           taskDocumentContext = documentContext.context;
+          taskDocumentOwnerHints = documentContext.taskOwnerHints;
         }
         let auditStart;
         const codexOptions = fullAccessPrefix
@@ -836,6 +838,7 @@ async function handleMessage(message) {
                 result,
                 channel,
                 stateDir: config.bot.stateDir,
+                documentOwnerHints: taskDocumentOwnerHints,
               });
             } catch (error) {
               console.error(`Task-intake result failed for ${message.messageId}`, error);

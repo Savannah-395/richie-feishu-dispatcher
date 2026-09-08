@@ -370,10 +370,14 @@ function mergeDirectoryUser(current, incoming) {
 }
 
 async function loadMentionOwnerProfiles(client, owners) {
+  const uniqueOwners = [...new Map((owners || [])
+    .map((owner) => directoryUser(owner))
+    .filter((owner) => owner.openId)
+    .map((owner) => [owner.openId, owner])).values()];
   if (typeof client?.contact?.v3?.user?.get !== "function") {
-    return owners.map((owner) => directoryUser(owner));
+    return uniqueOwners;
   }
-  return Promise.all(owners.map(async (owner) => {
+  return Promise.all(uniqueOwners.map(async (owner) => {
     try {
       const response = await callApi(`读取${owner.name || "任务负责人"}的通讯录编制信息`, () => client.contact.v3.user.get({
         params: {
@@ -503,7 +507,22 @@ function organizationDefaults(user, schema, config) {
   };
 }
 
-function normalizeTasks(protocol, message, config, records, directory, schema) {
+function documentOwnerForDescription(description, documentOwnerHints, config) {
+  const normalized = normalizeDescription(description);
+  if (!normalized) {
+    return "";
+  }
+  const matches = uniqueStrings((documentOwnerHints || [])
+    .filter((hint) => hint.ownerOpenId && hint.ownerOpenId !== config.bot_open_id)
+    .filter((hint) => {
+      const hinted = normalizeDescription(hint.description);
+      return hinted && (hinted === normalized || hinted.includes(normalized) || normalized.includes(hinted));
+    })
+    .map((hint) => hint.ownerOpenId));
+  return matches.length === 1 ? matches[0] : "";
+}
+
+function normalizeTasks(protocol, message, config, records, directory, schema, documentOwnerHints = []) {
   const sourceMentions = buildStructuredMentions(message, config.bot_open_id);
   const directoryById = new Map(directory.map((user) => [user.openId, user]));
   const rawTasks = Array.isArray(protocol.tasks) ? protocol.tasks : [];
@@ -513,7 +532,14 @@ function normalizeTasks(protocol, message, config, records, directory, schema) {
     const ownerIdsByName = uniqueStrings(sourceMentions
       .filter((mention) => !mention.is_bot && mention.open_id && mention.name === ownerName)
       .map((mention) => mention.open_id));
-    const ownerOpenId = suppliedOwnerOpenId || (ownerIdsByName.length === 1 ? ownerIdsByName[0] : "");
+    const documentOwnerOpenId = documentOwnerForDescription(
+      candidateValue(candidate, "description", "task_text_original", "task"),
+      documentOwnerHints,
+      config,
+    );
+    const ownerOpenId = documentOwnerOpenId
+      || suppliedOwnerOpenId
+      || (ownerIdsByName.length === 1 ? ownerIdsByName[0] : "");
     const historical = latestOwnerDefaults(records, ownerOpenId, config);
     const organization = organizationDefaults(directoryById.get(ownerOpenId), schema, config);
     return {
@@ -545,6 +571,15 @@ function sourceMentionOwners(message, config) {
   return buildStructuredMentions(message, config.bot_open_id)
     .filter((mention) => !mention.is_bot && mention.open_id)
     .map((mention) => ({ openId: mention.open_id, name: mention.name || mention.open_id }));
+}
+
+function documentMentionOwners(documentOwnerHints, config) {
+  return [...new Map((documentOwnerHints || [])
+    .filter((hint) => hint?.ownerOpenId && hint.ownerOpenId !== config.bot_open_id)
+    .map((hint) => [hint.ownerOpenId, {
+      openId: hint.ownerOpenId,
+      name: hint.ownerName || hint.ownerOpenId,
+    }])).values()];
 }
 
 function mergeDirectoryUsers(directory, additionalUsers) {
@@ -818,7 +853,14 @@ function createTaskIntakeStore(stateDir) {
   return new DurableStateStore(path.join(stateDir, "task-intake"));
 }
 
-export async function handleTaskIntakeResult({ route, message, result, channel, stateDir }) {
+export async function handleTaskIntakeResult({
+  route,
+  message,
+  result,
+  channel,
+  stateDir,
+  documentOwnerHints = [],
+}) {
   if (!isTaskIntakeRoute(route)) {
     return false;
   }
@@ -847,16 +889,25 @@ export async function handleTaskIntakeResult({ route, message, result, channel, 
 
   const client = channel.rawClient;
   const trustedMentionOwners = sourceMentionOwners(message, config);
+  const trustedDocumentOwners = documentMentionOwners(documentOwnerHints, config);
   const [loadedDirectory, fields, records, mentionProfiles] = await Promise.all([
     loadEmployeeDirectory(client, config),
     listBaseFields(client, config),
     listBaseRecords(client, config),
-    loadMentionOwnerProfiles(client, trustedMentionOwners),
+    loadMentionOwnerProfiles(client, [...trustedMentionOwners, ...trustedDocumentOwners]),
   ]);
   const directory = mergeDirectoryUsers(loadedDirectory, mentionProfiles);
   const schema = verifyBaseSchema(fields, config);
   const directoryIds = new Set(directory.map((user) => user.openId));
-  let tasks = normalizeTasks(protocol, message, config, records, directory, schema);
+  let tasks = normalizeTasks(
+    protocol,
+    message,
+    config,
+    records,
+    directory,
+    schema,
+    documentOwnerHints,
+  );
   tasks = findExactDuplicates(tasks, records, config).map((task) => ({
     ...task,
     ownerOpenId: directoryIds.has(task.ownerOpenId) ? task.ownerOpenId : "",

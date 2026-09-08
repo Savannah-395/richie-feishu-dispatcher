@@ -125,6 +125,10 @@ test("task intake fetches Wiki-backed Docx blocks through the native bot client"
   assert.match(result.context, /title="会议纪要"/);
   assert.match(result.context, /<h1[^>]*>九、待办<\/h1>/);
   assert.match(result.context, /<li[^>]*kind="ordered">吃五颗糖<cite type="user" user-id="ou_owner"><\/cite><\/li>/);
+  assert.deepEqual(result.taskOwnerHints, [{
+    description: "吃五颗糖",
+    ownerOpenId: "ou_owner",
+  }]);
 });
 
 test("direct Docx links do not require Wiki resolution", async () => {
