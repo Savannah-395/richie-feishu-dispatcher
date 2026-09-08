@@ -272,14 +272,22 @@ async function loadEmployeeDirectory(client, config, { force = false } = {}) {
     return directoryCache.users;
   }
 
-  const fullScopeProbe = normalizeApiError(await client.contact.v3.user.findByDepartment({
-    params: {
-      department_id: "0",
-      department_id_type: "open_department_id",
-      user_id_type: "open_id",
-      page_size: 1,
-    },
-  }), "校验全员通讯录授权范围");
+  let fullScopeProbe;
+  try {
+    fullScopeProbe = normalizeApiError(await client.contact.v3.user.findByDepartment({
+      params: {
+        department_id: "0",
+        department_id_type: "open_department_id",
+        user_id_type: "open_id",
+        page_size: 1,
+      },
+    }), "校验全员通讯录授权范围");
+  } catch (error) {
+    throw new Error(
+      "Richie 的通讯录授权范围尚未覆盖全集团。请在飞书开放平台把该应用的通讯录可用范围设为全部员工，发布后再试。",
+      { cause: error },
+    );
+  }
   if (!fullScopeProbe?.data) {
     throw new Error("Richie 当前没有全集团通讯录授权，无法生成可搜索的任务负责人字段");
   }
