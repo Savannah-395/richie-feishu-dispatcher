@@ -743,3 +743,95 @@ test("document task owner hints survive a restricted directory and default the m
   assert.match(card, /"selected_values":\["镇江"\]/);
   assert.match(card, /"initial_option":"生产部"/);
 });
+
+test("image-recognized owner names resolve from unique Base history without a structured mention", async (context) => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "richie-task-intake-image-owner-"));
+  context.after(() => rm(temporary, { recursive: true, force: true }));
+  const deployDir = path.join(temporary, "deploy", "richie");
+  await mkdir(deployDir, { recursive: true });
+  const workflowConfigPath = path.join(deployDir, "task-intake.json");
+  await writeFile(workflowConfigPath, JSON.stringify({
+    chat_id: "oc_test",
+    bot_open_id: "ou_bot",
+    base_token: "base",
+    table_id: "table",
+    fields: {
+      description: { id: "desc", name: "任务描述", ui_type: "Text" },
+      owner: { id: "owner", name: "任务负责人", ui_type: "User" },
+      group: { id: "group", name: "集团", ui_type: "SingleSelect" },
+      base: { id: "base", name: "基地", ui_type: "MultiSelect" },
+      department: { id: "department", name: "部门", ui_type: "SingleSelect" },
+      reminder: { id: "reminder", name: "提醒频率", ui_type: "SingleSelect" },
+      status: { id: "status", name: "任务状态", ui_type: "SingleSelect", value: "进行中" },
+      reminderDate: {
+        id: "reminder_date",
+        name: "提醒日期",
+        ui_type: "DateTime",
+        time_zone: "Asia/Shanghai",
+        utc_offset: "+08:00",
+      },
+      startDate: { id: "start", name: "开始日期" },
+    },
+  }), "utf8");
+
+  const calls = {
+    cards: [],
+    baseWrites: [],
+    textMessages: [],
+    records: [{
+      created_time: 200,
+      fields: {
+        任务描述: "历史任务",
+        任务负责人: [{ id: "ou_yanyu", name: "颜宇" }],
+        集团: "再生",
+        基地: ["镇江"],
+        部门: "生产部",
+        开始日期: 200,
+      },
+    }],
+  };
+  const result = {
+    finalMessage: JSON.stringify({
+      protocol: "richie.task-intake.v1",
+      status: "candidates",
+      message: "",
+      tasks: [{
+        description: "吃五颗糖",
+        owner_open_id: "",
+        owner_name: "颜宇",
+        group: "",
+        bases: [],
+        department: "",
+        reminder_frequency: "一周一次",
+        duplicate_mode: "none",
+        duplicate_note: "",
+      }],
+    }),
+  };
+
+  assert.equal(await handleTaskIntakeResult({
+    route: {
+      workflow: "task-intake",
+      skillName: "lark-workflow-task-intake",
+      projectPath: temporary,
+      workflowConfigPath,
+    },
+    message: {
+      chatId: "oc_test",
+      messageId: "om_image_source",
+      senderId: "ou_requester",
+      mentions: [{ key: "@_user_1", name: "Richie", openId: "ou_bot", isBot: true }],
+    },
+    result,
+    channel: { rawClient: makeClient(calls) },
+    stateDir: path.join(temporary, "state"),
+  }), true);
+
+  assert.equal(calls.cards.length, 1);
+  const card = calls.cards[0].data.content;
+  assert.match(card, /"initial_option":"ou_yanyu"/);
+  assert.match(card, /"value":"ou_yanyu"/);
+  assert.match(card, /"initial_option":"再生"/);
+  assert.match(card, /"selected_values":\["镇江"\]/);
+  assert.match(card, /"initial_option":"生产部"/);
+});

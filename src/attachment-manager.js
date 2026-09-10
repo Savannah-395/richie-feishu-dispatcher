@@ -49,10 +49,10 @@ function resourceFileName(resource, index, buffer) {
   return `${String(index + 1).padStart(2, "0")}-${resource.type}-${resource.fileKey}${extension}`;
 }
 
-function parseResourcesFromContent(content) {
+export function parseResourcesFromContent(content) {
   const resources = [];
-  const imagePattern = /!\[image\]\(([^)]+)\)/g;
-  const filePattern = /<file\s+key="([^"]+)"(?:\s+name="([^"]*)")?\s*\/>/g;
+  const imagePattern = /!\[image\]\(([^)]+)\)/gi;
+  const filePattern = /<file\s+key="([^"]+)"(?:\s+name="([^"]*)")?\s*\/>/gi;
 
   for (const match of content.matchAll(imagePattern)) {
     resources.push({ type: "image", fileKey: match[1] });

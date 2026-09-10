@@ -284,6 +284,39 @@ function ownerIds(value) {
     .filter(Boolean);
 }
 
+function normalizedPersonName(value) {
+  return asText(value).normalize("NFKC").replace(/\s+/g, "").toLocaleLowerCase("zh-CN");
+}
+
+function protocolOwnerNames(protocol) {
+  return new Set((Array.isArray(protocol?.tasks) ? protocol.tasks : [])
+    .map((candidate) => normalizedPersonName(candidateValue(candidate, "owner_name", "ownerName")))
+    .filter(Boolean));
+}
+
+function matchingHistoricalOwnerProfiles(protocol, records, config) {
+  const requestedNames = protocolOwnerNames(protocol);
+  if (requestedNames.size === 0) {
+    return [];
+  }
+  const profiles = new Map();
+  const ownerFieldName = config.fields.owner.name;
+  for (const record of records) {
+    const values = Array.isArray(record.fields?.[ownerFieldName])
+      ? record.fields[ownerFieldName]
+      : [record.fields?.[ownerFieldName]];
+    for (const value of values) {
+      const openId = asText(value?.id || value?.open_id);
+      const name = asText(value?.name || value?.display_name);
+      if (!openId || !name || !requestedNames.has(normalizedPersonName(name))) {
+        continue;
+      }
+      profiles.set(openId, { openId, name });
+    }
+  }
+  return [...profiles.values()];
+}
+
 function latestOwnerDefaults(records, ownerOpenId, config) {
   if (!ownerOpenId) {
     return { group: "", bases: [], department: "" };
@@ -525,6 +558,13 @@ function documentOwnerForDescription(description, documentOwnerHints, config) {
 function normalizeTasks(protocol, message, config, records, directory, schema, documentOwnerHints = []) {
   const sourceMentions = buildStructuredMentions(message, config.bot_open_id);
   const directoryById = new Map(directory.map((user) => [user.openId, user]));
+  const directoryIdsByName = new Map();
+  for (const user of directory) {
+    const name = normalizedPersonName(user.name);
+    if (name) {
+      directoryIdsByName.set(name, [...(directoryIdsByName.get(name) || []), user.openId]);
+    }
+  }
   const rawTasks = Array.isArray(protocol.tasks) ? protocol.tasks : [];
   return rawTasks.map((candidate) => {
     const ownerName = asText(candidateValue(candidate, "owner_name", "ownerName"));
@@ -532,6 +572,9 @@ function normalizeTasks(protocol, message, config, records, directory, schema, d
     const ownerIdsByName = uniqueStrings(sourceMentions
       .filter((mention) => !mention.is_bot && mention.open_id && mention.name === ownerName)
       .map((mention) => mention.open_id));
+    const directoryOwnerIdsByName = uniqueStrings(
+      directoryIdsByName.get(normalizedPersonName(ownerName)) || [],
+    );
     const documentOwnerOpenId = documentOwnerForDescription(
       candidateValue(candidate, "description", "task_text_original", "task"),
       documentOwnerHints,
@@ -539,7 +582,8 @@ function normalizeTasks(protocol, message, config, records, directory, schema, d
     );
     const ownerOpenId = documentOwnerOpenId
       || suppliedOwnerOpenId
-      || (ownerIdsByName.length === 1 ? ownerIdsByName[0] : "");
+      || (ownerIdsByName.length === 1 ? ownerIdsByName[0] : "")
+      || (directoryOwnerIdsByName.length === 1 ? directoryOwnerIdsByName[0] : "");
     const historical = latestOwnerDefaults(records, ownerOpenId, config);
     const organization = organizationDefaults(directoryById.get(ownerOpenId), schema, config);
     return {
@@ -942,7 +986,11 @@ export async function handleTaskIntakeResult({
     listBaseRecords(client, config),
     loadMentionOwnerProfiles(client, [...trustedMentionOwners, ...trustedDocumentOwners]),
   ]);
-  const directory = mergeDirectoryUsers(loadedDirectory, mentionProfiles);
+  const historicalOwnerProfiles = matchingHistoricalOwnerProfiles(protocol, records, config);
+  const directory = mergeDirectoryUsers(loadedDirectory, [
+    ...mentionProfiles,
+    ...historicalOwnerProfiles,
+  ]);
   const schema = verifyBaseSchema(fields, config);
   const directoryIds = new Set(directory.map((user) => user.openId));
   let tasks = normalizeTasks(
