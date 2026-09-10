@@ -376,14 +376,34 @@ function organizationLabels(user) {
 
 function directoryUser(user, fallback = {}) {
   const openId = asText(user?.open_id || user?.openId || fallback.open_id || fallback.openId);
+  const departmentIds = uniqueStrings([
+    ...(user?.department_ids || user?.departmentIds || []),
+    ...(fallback.department_ids || fallback.departmentIds || []),
+  ]);
+  const departmentNames = uniqueStrings([
+    ...(user?.department_names || user?.departmentNames || []),
+    ...(fallback.department_names || fallback.departmentNames || []),
+  ]);
+  const rawJobLevelOrder = user?.job_level_order
+    ?? user?.jobLevelOrder
+    ?? fallback.job_level_order
+    ?? fallback.jobLevelOrder;
+  const parsedJobLevelOrder = Number(rawJobLevelOrder);
   const labels = uniqueStrings([
     ...(user?.organizationLabels || user?.organization_labels || []),
     ...(fallback.organizationLabels || fallback.organization_labels || []),
+    ...departmentNames,
     ...organizationLabels(user),
   ]);
   return {
     openId,
     name: asText(user?.name || fallback.name) || openId,
+    departmentIds,
+    departmentNames,
+    jobLevelId: asText(
+      user?.job_level_id || user?.jobLevelId || fallback.job_level_id || fallback.jobLevelId,
+    ),
+    jobLevelOrder: Number.isFinite(parsedJobLevelOrder) ? parsedJobLevelOrder : undefined,
     organizationLabels: labels,
   };
 }
@@ -392,14 +412,102 @@ function mergeDirectoryUser(current, incoming) {
   if (!current) {
     return directoryUser(incoming);
   }
+  const normalizedIncoming = directoryUser(incoming);
   return {
     openId: current.openId,
-    name: current.name || incoming.name || current.openId,
+    name: current.name || normalizedIncoming.name || current.openId,
+    departmentIds: uniqueStrings([
+      ...(current.departmentIds || []),
+      ...(normalizedIncoming.departmentIds || []),
+    ]),
+    departmentNames: uniqueStrings([
+      ...(current.departmentNames || []),
+      ...(normalizedIncoming.departmentNames || []),
+    ]),
+    jobLevelId: current.jobLevelId || normalizedIncoming.jobLevelId,
+    jobLevelOrder: Number.isFinite(current.jobLevelOrder)
+      ? current.jobLevelOrder
+      : normalizedIncoming.jobLevelOrder,
     organizationLabels: uniqueStrings([
       ...(current.organizationLabels || []),
-      ...(incoming.organizationLabels || incoming.organization_labels || []),
+      ...(normalizedIncoming.organizationLabels || []),
     ]),
   };
+}
+
+async function loadDepartmentNames(client) {
+  if (typeof client?.contact?.v3?.department?.childrenWithIterator !== "function") {
+    return new Map();
+  }
+  try {
+    const namesById = new Map();
+    const iterator = await callApi("读取全集团部门目录", () => (
+      client.contact.v3.department.childrenWithIterator({
+        params: {
+          user_id_type: "open_id",
+          department_id_type: "open_department_id",
+          fetch_child: true,
+          page_size: 50,
+        },
+        path: { department_id: "0" },
+      })
+    ));
+    for await (const page of iterator) {
+      for (const department of page?.items || []) {
+        const departmentId = asText(department?.open_department_id || department?.department_id);
+        const departmentName = asText(department?.name || department?.i18n_name?.zh_cn);
+        if (departmentId && departmentName && !department?.status?.is_deleted) {
+          namesById.set(departmentId, departmentName);
+        }
+      }
+    }
+    return namesById;
+  } catch (error) {
+    console.warn("Unable to load department names for task-owner disambiguation", error);
+    return new Map();
+  }
+}
+
+async function loadJobLevelOrders(client) {
+  if (typeof client?.contact?.v3?.jobLevel?.listWithIterator !== "function") {
+    return new Map();
+  }
+  try {
+    const ordersById = new Map();
+    const iterator = await callApi("读取通讯录职级排序", () => (
+      client.contact.v3.jobLevel.listWithIterator({ params: { page_size: 50 } })
+    ));
+    for await (const page of iterator) {
+      for (const level of page?.items || []) {
+        const jobLevelId = asText(level?.job_level_id);
+        const order = Number(level?.order);
+        if (jobLevelId && level?.status !== false && Number.isFinite(order)) {
+          ordersById.set(jobLevelId, order);
+        }
+      }
+    }
+    return ordersById;
+  } catch (error) {
+    console.warn("Unable to load job-level order for task-owner disambiguation", error);
+    return new Map();
+  }
+}
+
+function enrichDirectoryUser(user, departmentNamesById, jobLevelOrdersById) {
+  const normalized = directoryUser(user);
+  const departmentNames = uniqueStrings([
+    ...(normalized.departmentNames || []),
+    ...normalized.departmentIds.map((departmentId) => departmentNamesById.get(departmentId)),
+  ]);
+  return directoryUser({
+    ...normalized,
+    departmentNames,
+    jobLevelOrder: jobLevelOrdersById.get(normalized.jobLevelId) ?? normalized.jobLevelOrder,
+    organizationLabels: uniqueStrings([
+      ...(normalized.organizationLabels || []),
+      ...departmentNames,
+    ]),
+  });
 }
 
 async function loadMentionOwnerProfiles(client, owners) {
@@ -428,7 +536,9 @@ async function loadMentionOwnerProfiles(client, owners) {
 }
 
 async function loadEmployeeDirectory(client, config, { force = false } = {}) {
-  if (!force && directoryCache && Date.now() - directoryCache.loadedAt < DIRECTORY_TTL_MS) {
+  const cacheKey = asText(config.configPath) || `${config.chat_id}:${config.bot_open_id || ""}`;
+  if (!force && directoryCache?.key === cacheKey
+    && Date.now() - directoryCache.loadedAt < DIRECTORY_TTL_MS) {
     return directoryCache.users;
   }
 
@@ -454,17 +564,25 @@ async function loadEmployeeDirectory(client, config, { force = false } = {}) {
 
   const excludedOpenIds = new Set(uniqueStrings([config.bot_open_id, ...(config.excluded_owner_open_ids || [])]));
   const usersById = new Map();
-  const iterator = await client.contact.v3.user.listWithIterator({
-    params: {
-      user_id_type: "open_id",
-      department_id_type: "open_department_id",
-      page_size: 50,
-    },
-  });
+  const [iterator, departmentNamesById, jobLevelOrdersById] = await Promise.all([
+    client.contact.v3.user.listWithIterator({
+      params: {
+        user_id_type: "open_id",
+        department_id_type: "open_department_id",
+        page_size: 50,
+      },
+    }),
+    loadDepartmentNames(client),
+    loadJobLevelOrders(client),
+  ]);
   for await (const page of iterator) {
     for (const user of page?.items || []) {
       if (isActiveEmployee(user, excludedOpenIds)) {
-        usersById.set(user.open_id, directoryUser(user));
+        usersById.set(user.open_id, enrichDirectoryUser(
+          user,
+          departmentNamesById,
+          jobLevelOrdersById,
+        ));
       }
     }
   }
@@ -473,7 +591,7 @@ async function loadEmployeeDirectory(client, config, { force = false } = {}) {
   if (users.length === 0) {
     throw new Error("全集团通讯录返回空结果，无法生成任务负责人字段");
   }
-  directoryCache = { loadedAt: Date.now(), users };
+  directoryCache = { key: cacheKey, loadedAt: Date.now(), users };
   return users;
 }
 
@@ -555,6 +673,64 @@ function documentOwnerForDescription(description, documentOwnerHints, config) {
   return matches.length === 1 ? matches[0] : "";
 }
 
+function latestOwnerTaskTime(records, ownerOpenId, config) {
+  if (!ownerOpenId) {
+    return 0;
+  }
+  const ownerFieldName = config.fields.owner.name;
+  const startFieldName = config.fields.startDate.name;
+  return records
+    .filter((record) => ownerIds(record.fields?.[ownerFieldName]).includes(ownerOpenId))
+    .reduce((latest, record) => Math.max(
+      latest,
+      normalizeDate(record.fields?.[startFieldName], Number(record.created_time) || 0),
+    ), 0);
+}
+
+function ownerMatchesTaskDepartment(user, requestedDepartment, records, schema, config) {
+  const expected = normalizedOrgText(requestedDepartment);
+  if (!expected || !user?.openId) {
+    return false;
+  }
+  const historical = latestOwnerDefaults(records, user.openId, config);
+  const organization = organizationDefaults(user, schema, config);
+  return uniqueStrings([
+    historical.department,
+    organization.department,
+    ...(user.departmentNames || []),
+  ]).some((department) => normalizedOrgText(department) === expected);
+}
+
+function preferredOwnerOpenId(ownerOpenIds, requestedDepartment, records, directoryById, schema, config) {
+  let candidates = uniqueStrings(ownerOpenIds)
+    .map((openId) => directoryById.get(openId))
+    .filter(Boolean);
+  if (candidates.length === 0) {
+    return "";
+  }
+  const departmentMatches = candidates.filter((user) => ownerMatchesTaskDepartment(
+    user,
+    requestedDepartment,
+    records,
+    schema,
+    config,
+  ));
+  if (departmentMatches.length > 0) {
+    candidates = departmentMatches;
+  }
+  candidates.sort((left, right) => {
+    const leftOrder = Number.isFinite(left.jobLevelOrder) ? left.jobLevelOrder : Number.POSITIVE_INFINITY;
+    const rightOrder = Number.isFinite(right.jobLevelOrder) ? right.jobLevelOrder : Number.POSITIVE_INFINITY;
+    if (leftOrder !== rightOrder) {
+      return leftOrder - rightOrder;
+    }
+    const recentDifference = latestOwnerTaskTime(records, right.openId, config)
+      - latestOwnerTaskTime(records, left.openId, config);
+    return recentDifference || left.openId.localeCompare(right.openId);
+  });
+  return candidates[0]?.openId || "";
+}
+
 function normalizeTasks(protocol, message, config, records, directory, schema, documentOwnerHints = []) {
   const sourceMentions = buildStructuredMentions(message, config.bot_open_id);
   const directoryById = new Map(directory.map((user) => [user.openId, user]));
@@ -568,6 +744,7 @@ function normalizeTasks(protocol, message, config, records, directory, schema, d
   const rawTasks = Array.isArray(protocol.tasks) ? protocol.tasks : [];
   return rawTasks.map((candidate) => {
     const ownerName = asText(candidateValue(candidate, "owner_name", "ownerName"));
+    const requestedDepartment = asText(candidateValue(candidate, "department"));
     const suppliedOwnerOpenId = asText(candidateValue(candidate, "owner_open_id", "ownerOpenId"));
     const ownerIdsByName = uniqueStrings(sourceMentions
       .filter((mention) => !mention.is_bot && mention.open_id && mention.name === ownerName)
@@ -582,10 +759,26 @@ function normalizeTasks(protocol, message, config, records, directory, schema, d
     );
     const ownerOpenId = documentOwnerOpenId
       || suppliedOwnerOpenId
-      || (ownerIdsByName.length === 1 ? ownerIdsByName[0] : "")
-      || (directoryOwnerIdsByName.length === 1 ? directoryOwnerIdsByName[0] : "");
+      || preferredOwnerOpenId(
+        ownerIdsByName,
+        requestedDepartment,
+        records,
+        directoryById,
+        schema,
+        config,
+      )
+      || preferredOwnerOpenId(
+        directoryOwnerIdsByName,
+        requestedDepartment,
+        records,
+        directoryById,
+        schema,
+        config,
+      );
     const historical = latestOwnerDefaults(records, ownerOpenId, config);
     const organization = organizationDefaults(directoryById.get(ownerOpenId), schema, config);
+    const suppliedGroup = asText(candidateValue(candidate, "group"));
+    const suppliedBases = uniqueStrings(candidateValue(candidate, "bases", "base"));
     return {
       description: stripAssignmentMentions(asText(candidateValue(
         candidate,
@@ -595,15 +788,15 @@ function normalizeTasks(protocol, message, config, records, directory, schema, d
       )), message),
       ownerOpenId,
       ownerName,
-      group: historical.group || organization.group || asText(candidateValue(candidate, "group")),
+      group: historical.group || organization.group || suppliedGroup,
       bases: historical.bases.length > 0
         ? historical.bases
         : organization.bases.length > 0
           ? organization.bases
-          : uniqueStrings(candidateValue(candidate, "bases", "base")),
+          : suppliedBases,
       department: historical.department
         || organization.department
-        || asText(candidateValue(candidate, "department")),
+        || requestedDepartment,
       reminder: asText(candidateValue(candidate, "reminder_frequency", "reminder")) || "一周一次",
       duplicateMode: asText(candidateValue(candidate, "duplicate_mode", "duplicateMode")) || "none",
       duplicateNote: asText(candidateValue(candidate, "duplicate_note", "duplicateNote")),

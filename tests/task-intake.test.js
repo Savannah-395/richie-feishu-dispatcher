@@ -80,6 +80,31 @@ function asyncPages(...pages) {
   };
 }
 
+function findNamedElement(value, name) {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const match = findNamedElement(item, name);
+      if (match) {
+        return match;
+      }
+    }
+    return undefined;
+  }
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  if (value.name === name) {
+    return value;
+  }
+  for (const item of Object.values(value)) {
+    const match = findNamedElement(item, name);
+    if (match) {
+      return match;
+    }
+  }
+  return undefined;
+}
+
 function makeClient(calls) {
   return {
     request: async (payload) => {
@@ -98,16 +123,19 @@ function makeClient(calls) {
       v3: {
         user: {
           findByDepartment: async () => ({ code: 0, data: { items: [] } }),
-          get: async ({ path: { user_id: userId } }) => ({
-            code: 0,
-            data: {
-              user: userId === "ou_second" || userId === "ou_yanyu"
-                ? { open_id: userId, name: "颜宇", nickname: "Haze | 英科再生 镇江 生产部" }
-                : { open_id: userId, name: "段星岚", nickname: "Savannah | 英科医疗 AIT部" },
-            },
-          }),
+          get: async ({ path: { user_id: userId } }) => {
+            const configured = calls.userProfiles?.[userId];
+            return {
+              code: 0,
+              data: {
+                user: configured || (userId === "ou_second" || userId === "ou_yanyu"
+                  ? { open_id: userId, name: "颜宇", nickname: "Haze | 英科再生 镇江 生产部" }
+                  : { open_id: userId, name: "段星岚", nickname: "Savannah | 英科医疗 AIT部" }),
+              },
+            };
+          },
           listWithIterator: async () => asyncPages({
-            items: [
+            items: calls.directoryUsers || [
               {
                 open_id: "ou_owner",
                 name: "段星岚",
@@ -122,6 +150,16 @@ function makeClient(calls) {
               },
               { open_id: "ou_bot", name: "Richie", status: { is_activated: true } },
             ],
+          }),
+        },
+        department: {
+          childrenWithIterator: async () => asyncPages({
+            items: calls.departments || [],
+          }),
+        },
+        jobLevel: {
+          listWithIterator: async () => asyncPages({
+            items: calls.jobLevels || [],
           }),
         },
       },
@@ -834,4 +872,125 @@ test("image-recognized owner names resolve from unique Base history without a st
   assert.match(card, /"initial_option":"再生"/);
   assert.match(card, /"selected_values":\["镇江"\]/);
   assert.match(card, /"initial_option":"生产部"/);
+});
+
+test("duplicate image owner names prefer the task department, then the highest directory job level", async (context) => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), "richie-task-intake-duplicate-owner-"));
+  context.after(() => rm(temporary, { recursive: true, force: true }));
+  const deployDir = path.join(temporary, "deploy", "richie");
+  await mkdir(deployDir, { recursive: true });
+  const workflowConfigPath = path.join(deployDir, "task-intake.json");
+  await writeFile(workflowConfigPath, JSON.stringify({
+    chat_id: "oc_test",
+    bot_open_id: "ou_bot",
+    base_token: "base",
+    table_id: "table",
+    fields: {
+      description: { id: "desc", name: "任务描述", ui_type: "Text" },
+      owner: { id: "owner", name: "任务负责人", ui_type: "User" },
+      group: { id: "group", name: "集团", ui_type: "SingleSelect" },
+      base: { id: "base", name: "基地", ui_type: "MultiSelect" },
+      department: { id: "department", name: "部门", ui_type: "SingleSelect" },
+      reminder: { id: "reminder", name: "提醒频率", ui_type: "SingleSelect" },
+      status: { id: "status", name: "任务状态", ui_type: "SingleSelect", value: "进行中" },
+      reminderDate: { id: "reminder_date", name: "提醒日期", ui_type: "DateTime" },
+      startDate: { id: "start", name: "开始日期" },
+    },
+  }), "utf8");
+
+  const active = { is_activated: true };
+  const calls = {
+    cards: [],
+    baseWrites: [],
+    textMessages: [],
+    records: [],
+    departments: [
+      { open_department_id: "od_ait", name: "AIT部", status: { is_deleted: false } },
+      { open_department_id: "od_production", name: "生产部", status: { is_deleted: false } },
+    ],
+    jobLevels: [
+      { job_level_id: "level_1", order: 100, status: true },
+      { job_level_id: "level_2", order: 200, status: true },
+      { job_level_id: "level_3", order: 300, status: true },
+    ],
+    directoryUsers: [
+      {
+        open_id: "ou_wang_ait",
+        name: "王敏",
+        department_ids: ["od_ait"],
+        job_level_id: "level_1",
+        status: active,
+      },
+      {
+        open_id: "ou_wang_production_high",
+        name: "王敏",
+        department_ids: ["od_production"],
+        job_level_id: "level_2",
+        status: active,
+      },
+      {
+        open_id: "ou_wang_production_low",
+        name: "王敏",
+        department_ids: ["od_production"],
+        job_level_id: "level_3",
+        status: active,
+      },
+      { open_id: "ou_bot", name: "Richie", status: active },
+    ],
+  };
+  const result = {
+    finalMessage: JSON.stringify({
+      protocol: "richie.task-intake.v1",
+      status: "candidates",
+      message: "",
+      tasks: [
+        {
+          description: "核对生产日报",
+          owner_open_id: "",
+          owner_name: "王敏",
+          group: "",
+          bases: [],
+          department: "生产部",
+          reminder_frequency: "一周一次",
+          duplicate_mode: "none",
+          duplicate_note: "",
+        },
+        {
+          description: "整理未分类事项",
+          owner_open_id: "",
+          owner_name: "王敏",
+          group: "",
+          bases: [],
+          department: "",
+          reminder_frequency: "一周一次",
+          duplicate_mode: "none",
+          duplicate_note: "",
+        },
+      ],
+    }),
+  };
+
+  assert.equal(await handleTaskIntakeResult({
+    route: {
+      workflow: "task-intake",
+      skillName: "lark-workflow-task-intake",
+      projectPath: temporary,
+      workflowConfigPath,
+    },
+    message: {
+      chatId: "oc_test",
+      messageId: "om_duplicate_image_owner",
+      senderId: "ou_requester",
+      mentions: [{ key: "@_user_1", name: "Richie", openId: "ou_bot", isBot: true }],
+    },
+    result,
+    channel: { rawClient: makeClient(calls) },
+    stateDir: path.join(temporary, "state"),
+  }), true);
+
+  assert.equal(calls.cards.length, 1);
+  const card = JSON.parse(calls.cards[0].data.content);
+  assert.equal(findNamedElement(card, "t1_owner")?.initial_option, "ou_wang_production_high");
+  assert.equal(findNamedElement(card, "t2_owner")?.initial_option, "ou_wang_ait");
+  assert.equal(findNamedElement(card, "t1_department")?.initial_option, "生产部");
 });
