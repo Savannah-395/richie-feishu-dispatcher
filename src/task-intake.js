@@ -288,33 +288,33 @@ function normalizedPersonName(value) {
   return asText(value).normalize("NFKC").replace(/\s+/g, "").toLocaleLowerCase("zh-CN");
 }
 
-function protocolOwnerNames(protocol) {
-  return new Set((Array.isArray(protocol?.tasks) ? protocol.tasks : [])
-    .map((candidate) => normalizedPersonName(candidateValue(candidate, "owner_name", "ownerName")))
-    .filter(Boolean));
-}
-
-function matchingHistoricalOwnerProfiles(protocol, records, config) {
-  const requestedNames = protocolOwnerNames(protocol);
-  if (requestedNames.size === 0) {
-    return [];
-  }
+function buildHistoricalOwnerLibrary(records, config) {
   const profiles = new Map();
   const ownerFieldName = config.fields.owner.name;
   for (const record of records) {
+    const assignedAt = normalizeDate(
+      record.fields?.[config.fields.startDate.name],
+      Number(record.created_time) || 0,
+    );
     const values = Array.isArray(record.fields?.[ownerFieldName])
       ? record.fields[ownerFieldName]
       : [record.fields?.[ownerFieldName]];
     for (const value of values) {
       const openId = asText(value?.id || value?.open_id);
       const name = asText(value?.name || value?.display_name);
-      if (!openId || !name || !requestedNames.has(normalizedPersonName(name))) {
+      if (!openId) {
         continue;
       }
-      profiles.set(openId, { openId, name });
+      const current = profiles.get(openId);
+      profiles.set(openId, {
+        openId,
+        name: name || current?.name || openId,
+        assignmentCount: (current?.assignmentCount || 0) + 1,
+        lastAssignedAt: Math.max(current?.lastAssignedAt || 0, assignedAt),
+      });
     }
   }
-  return [...profiles.values()];
+  return profiles;
 }
 
 function latestOwnerDefaults(records, ownerOpenId, config) {
@@ -673,20 +673,6 @@ function documentOwnerForDescription(description, documentOwnerHints, config) {
   return matches.length === 1 ? matches[0] : "";
 }
 
-function latestOwnerTaskTime(records, ownerOpenId, config) {
-  if (!ownerOpenId) {
-    return 0;
-  }
-  const ownerFieldName = config.fields.owner.name;
-  const startFieldName = config.fields.startDate.name;
-  return records
-    .filter((record) => ownerIds(record.fields?.[ownerFieldName]).includes(ownerOpenId))
-    .reduce((latest, record) => Math.max(
-      latest,
-      normalizeDate(record.fields?.[startFieldName], Number(record.created_time) || 0),
-    ), 0);
-}
-
 function ownerMatchesTaskDepartment(user, requestedDepartment, records, schema, config) {
   const expected = normalizedOrgText(requestedDepartment);
   if (!expected || !user?.openId) {
@@ -699,6 +685,18 @@ function ownerMatchesTaskDepartment(user, requestedDepartment, records, schema, 
     organization.department,
     ...(user.departmentNames || []),
   ]).some((department) => normalizedOrgText(department) === expected);
+}
+
+function preferredHistoricalOwnerOpenId(ownerOpenIds, historicalOwnerLibrary) {
+  const candidates = uniqueStrings(ownerOpenIds)
+    .map((openId) => historicalOwnerLibrary.get(openId))
+    .filter(Boolean)
+    .sort((left, right) => (
+      right.lastAssignedAt - left.lastAssignedAt
+      || right.assignmentCount - left.assignmentCount
+      || left.openId.localeCompare(right.openId)
+    ));
+  return candidates[0]?.openId || "";
 }
 
 function preferredOwnerOpenId(ownerOpenIds, requestedDepartment, records, directoryById, schema, config) {
@@ -721,17 +719,21 @@ function preferredOwnerOpenId(ownerOpenIds, requestedDepartment, records, direct
   candidates.sort((left, right) => {
     const leftOrder = Number.isFinite(left.jobLevelOrder) ? left.jobLevelOrder : Number.POSITIVE_INFINITY;
     const rightOrder = Number.isFinite(right.jobLevelOrder) ? right.jobLevelOrder : Number.POSITIVE_INFINITY;
-    if (leftOrder !== rightOrder) {
-      return leftOrder - rightOrder;
-    }
-    const recentDifference = latestOwnerTaskTime(records, right.openId, config)
-      - latestOwnerTaskTime(records, left.openId, config);
-    return recentDifference || left.openId.localeCompare(right.openId);
+    return leftOrder - rightOrder || left.openId.localeCompare(right.openId);
   });
   return candidates[0]?.openId || "";
 }
 
-function normalizeTasks(protocol, message, config, records, directory, schema, documentOwnerHints = []) {
+function normalizeTasks(
+  protocol,
+  message,
+  config,
+  records,
+  directory,
+  schema,
+  documentOwnerHints = [],
+  historicalOwnerLibrary = buildHistoricalOwnerLibrary(records, config),
+) {
   const sourceMentions = buildStructuredMentions(message, config.bot_open_id);
   const directoryById = new Map(directory.map((user) => [user.openId, user]));
   const directoryIdsByName = new Map();
@@ -757,6 +759,17 @@ function normalizeTasks(protocol, message, config, records, directory, schema, d
       documentOwnerHints,
       config,
     );
+    const directoryOwnerOpenId = directoryOwnerIdsByName.length === 1
+      ? directoryOwnerIdsByName[0]
+      : preferredHistoricalOwnerOpenId(directoryOwnerIdsByName, historicalOwnerLibrary)
+        || preferredOwnerOpenId(
+          directoryOwnerIdsByName,
+          requestedDepartment,
+          records,
+          directoryById,
+          schema,
+          config,
+        );
     const ownerOpenId = documentOwnerOpenId
       || suppliedOwnerOpenId
       || preferredOwnerOpenId(
@@ -767,14 +780,7 @@ function normalizeTasks(protocol, message, config, records, directory, schema, d
         schema,
         config,
       )
-      || preferredOwnerOpenId(
-        directoryOwnerIdsByName,
-        requestedDepartment,
-        records,
-        directoryById,
-        schema,
-        config,
-      );
+      || directoryOwnerOpenId;
     const historical = latestOwnerDefaults(records, ownerOpenId, config);
     const organization = organizationDefaults(directoryById.get(ownerOpenId), schema, config);
     const suppliedGroup = asText(candidateValue(candidate, "group"));
@@ -1179,11 +1185,8 @@ export async function handleTaskIntakeResult({
     listBaseRecords(client, config),
     loadMentionOwnerProfiles(client, [...trustedMentionOwners, ...trustedDocumentOwners]),
   ]);
-  const historicalOwnerProfiles = matchingHistoricalOwnerProfiles(protocol, records, config);
-  const directory = mergeDirectoryUsers(loadedDirectory, [
-    ...mentionProfiles,
-    ...historicalOwnerProfiles,
-  ]);
+  const historicalOwnerLibrary = buildHistoricalOwnerLibrary(records, config);
+  const directory = mergeDirectoryUsers(loadedDirectory, mentionProfiles);
   const schema = verifyBaseSchema(fields, config);
   const directoryIds = new Set(directory.map((user) => user.openId));
   let tasks = normalizeTasks(
@@ -1194,6 +1197,7 @@ export async function handleTaskIntakeResult({
     directory,
     schema,
     documentOwnerHints,
+    historicalOwnerLibrary,
   );
   tasks = findExactDuplicates(tasks, records, config).map((task) => ({
     ...task,

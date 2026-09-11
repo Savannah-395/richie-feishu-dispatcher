@@ -148,6 +148,12 @@ function makeClient(calls) {
                 nickname: "Haze | 英科再生 镇江 生产部",
                 status: { is_activated: true },
               },
+              {
+                open_id: "ou_yanyu",
+                name: "颜宇",
+                nickname: "Haze | 英科再生 镇江 生产部",
+                status: { is_activated: true },
+              },
               { open_id: "ou_bot", name: "Richie", status: { is_activated: true } },
             ],
           }),
@@ -874,7 +880,7 @@ test("image-recognized owner names resolve from unique Base history without a st
   assert.match(card, /"initial_option":"生产部"/);
 });
 
-test("duplicate image owner names prefer the task department, then the highest directory job level", async (context) => {
+test("image owner search uses unique company matches, then historical assignees, then department and rank", async (context) => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), "richie-task-intake-duplicate-owner-"));
   context.after(() => rm(temporary, { recursive: true, force: true }));
   const deployDir = path.join(temporary, "deploy", "richie");
@@ -903,7 +909,30 @@ test("duplicate image owner names prefer the task department, then the highest d
     cards: [],
     baseWrites: [],
     textMessages: [],
-    records: [],
+    records: [
+      {
+        created_time: 100,
+        fields: {
+          任务描述: "较早任务",
+          任务负责人: [{ id: "ou_wang_production_high", name: "王敏" }],
+          集团: "再生",
+          基地: ["镇江"],
+          部门: "生产部",
+          开始日期: 100,
+        },
+      },
+      {
+        created_time: 200,
+        fields: {
+          任务描述: "最近任务",
+          任务负责人: [{ id: "ou_wang_production_low", name: "王敏" }],
+          集团: "再生",
+          基地: ["镇江"],
+          部门: "生产部",
+          开始日期: 200,
+        },
+      },
+    ],
     departments: [
       { open_department_id: "od_ait", name: "AIT部", status: { is_deleted: false } },
       { open_department_id: "od_production", name: "生产部", status: { is_deleted: false } },
@@ -932,6 +961,27 @@ test("duplicate image owner names prefer the task department, then the highest d
         open_id: "ou_wang_production_low",
         name: "王敏",
         department_ids: ["od_production"],
+        job_level_id: "level_3",
+        status: active,
+      },
+      {
+        open_id: "ou_li_ait",
+        name: "李明",
+        department_ids: ["od_ait"],
+        job_level_id: "level_2",
+        status: active,
+      },
+      {
+        open_id: "ou_li_production",
+        name: "李明",
+        department_ids: ["od_production"],
+        job_level_id: "level_3",
+        status: active,
+      },
+      {
+        open_id: "ou_zhao",
+        name: "赵强",
+        department_ids: ["od_ait"],
         job_level_id: "level_3",
         status: active,
       },
@@ -966,6 +1016,39 @@ test("duplicate image owner names prefer the task department, then the highest d
           duplicate_mode: "none",
           duplicate_note: "",
         },
+        {
+          description: "核对李明的生产事项",
+          owner_open_id: "",
+          owner_name: "李明",
+          group: "",
+          bases: [],
+          department: "生产部",
+          reminder_frequency: "一周一次",
+          duplicate_mode: "none",
+          duplicate_note: "",
+        },
+        {
+          description: "核对李明的未分类事项",
+          owner_open_id: "",
+          owner_name: "李明",
+          group: "",
+          bases: [],
+          department: "",
+          reminder_frequency: "一周一次",
+          duplicate_mode: "none",
+          duplicate_note: "",
+        },
+        {
+          description: "处理赵强事项",
+          owner_open_id: "",
+          owner_name: "赵强",
+          group: "",
+          bases: [],
+          department: "",
+          reminder_frequency: "一周一次",
+          duplicate_mode: "none",
+          duplicate_note: "",
+        },
       ],
     }),
   };
@@ -990,7 +1073,10 @@ test("duplicate image owner names prefer the task department, then the highest d
 
   assert.equal(calls.cards.length, 1);
   const card = JSON.parse(calls.cards[0].data.content);
-  assert.equal(findNamedElement(card, "t1_owner")?.initial_option, "ou_wang_production_high");
-  assert.equal(findNamedElement(card, "t2_owner")?.initial_option, "ou_wang_ait");
+  assert.equal(findNamedElement(card, "t1_owner")?.initial_option, "ou_wang_production_low");
+  assert.equal(findNamedElement(card, "t2_owner")?.initial_option, "ou_wang_production_low");
+  assert.equal(findNamedElement(card, "t3_owner")?.initial_option, "ou_li_production");
+  assert.equal(findNamedElement(card, "t4_owner")?.initial_option, "ou_li_ait");
+  assert.equal(findNamedElement(card, "t5_owner")?.initial_option, "ou_zhao");
   assert.equal(findNamedElement(card, "t1_department")?.initial_option, "生产部");
 });
